@@ -15,7 +15,6 @@ if %errorlevel% neq 0 (
     echo  [--] Node.js not found. Attempting auto-install via winget...
     echo.
 
-    :: Check if winget is available (Windows 10 1709+ / Windows 11)
     where winget >nul 2>&1
     if !errorlevel! equ 0 (
         echo  [--] Installing Node.js 20 LTS via winget...
@@ -23,10 +22,8 @@ if %errorlevel% neq 0 (
         if !errorlevel! neq 0 (
             echo  [WARN] winget install may have failed. Trying to refresh PATH...
         )
-        :: Refresh PATH so node is available in this session
         for /f "tokens=*" %%i in ('where node 2^>nul') do set NODE_PATH=%%i
         if "!NODE_PATH!"=="" (
-            :: Try the default install location
             if exist "%ProgramFiles%\nodejs\node.exe" (
                 set "PATH=%ProgramFiles%\nodejs;!PATH!"
             )
@@ -35,7 +32,6 @@ if %errorlevel% neq 0 (
         echo  [WARN] winget is not available on this system.
     )
 
-    :: Check again after attempted install
     where node >nul 2>&1
     if !errorlevel! neq 0 (
         echo.
@@ -87,11 +83,9 @@ echo.
 echo  [--] First install attempt failed. Trying to fix build tools...
 echo.
 
-:: Try node-gyp rebuild approach: install node-gyp globally and windows-build-tools
 echo  [--] Installing node-gyp...
 call npm install -g node-gyp >nul 2>&1
 
-:: Check for Visual Studio / Build Tools via winget
 where winget >nul 2>&1
 if %errorlevel% equ 0 (
     echo  [--] Installing Visual Studio Build Tools (C++ workload)...
@@ -219,24 +213,159 @@ if "%PORT25%"=="OPEN" (
     echo              of the Web GUI after launch.
 )
 
-:: ── 8. Done ────────────────────────────────────────────────────
+:: ── 8. Firewall rule for port 3000 ──────────────────────────────
+echo.
+echo  [--] Adding Windows Firewall rule for port 3000...
+netsh advfirewall firewall show rule name="vps-sender Web GUI" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo  [OK] Firewall rule for port 3000 already exists
+) else (
+    netsh advfirewall firewall add rule ^
+        name="vps-sender Web GUI" ^
+        dir=in action=allow protocol=TCP localport=3000 ^
+        description="VPS Sender v2 Web GUI" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo  [OK] Firewall: inbound TCP 3000 allowed
+    ) else (
+        echo  [WARN] Could not add firewall rule ^(run as Administrator for this^).
+        echo         To add manually ^(PowerShell as Admin^):
+        echo         netsh advfirewall firewall add rule name="vps-sender Web GUI" dir=in action=allow protocol=TCP localport=3000
+    )
+)
+
+:: ── 9. Public access prompt ──────────────────────────────────────
+echo.
+echo  ────────────────────────────────────────────────────────────
+echo   Web GUI Access
+echo  ────────────────────────────────────────────────────────────
+echo.
+echo   The GUI defaults to localhost:3000 ^(safe for local use^).
+echo   To access it from another machine or browser on the network,
+echo   bind it to 0.0.0.0 ^(all interfaces^).
+echo.
+set /p BIND_PUBLIC="  Bind GUI to public network (0.0.0.0)? [y/N]: "
+
+set API_TOKEN=
+if /i "!BIND_PUBLIC!"=="y" (
+    echo.
+    echo  [WARN] Public binding enabled. An API token is strongly recommended.
+    set /p API_TOKEN="  Set API token (leave blank to skip — NOT recommended): "
+    echo.
+
+    node -e "
+      const fs = require('fs'), p = './config.json';
+      const c  = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,'utf8')) : {};
+      c.bindHost = '0.0.0.0';
+      const tok = process.argv[2];
+      if (tok) c.apiToken = tok;
+      fs.writeFileSync(p, JSON.stringify(c, null, 2));
+    " -- "!API_TOKEN!"
+
+    echo  [OK] bindHost set to 0.0.0.0
+    if "!API_TOKEN!"=="" (
+        echo  [WARN] No API token set — the GUI will be open without authentication!
+    ) else (
+        echo  [OK] API token configured
+    )
+    set BIND_IS_PUBLIC=1
+) else (
+    echo  [OK] GUI will bind to localhost ^(127.0.0.1^) — localhost only
+    set BIND_IS_PUBLIC=0
+)
+
+:: ── 10. PM2 process manager (optional) ──────────────────────────
+echo.
+echo  ────────────────────────────────────────────────────────────
+echo   Process Manager ^(PM2^)
+echo  ────────────────────────────────────────────────────────────
+echo.
+echo   PM2 keeps the server alive after you close this window
+echo   and restarts it automatically if it crashes.
+echo.
+set /p SETUP_PM2="  Install PM2 and start the server now? [y/N]: "
+
+set PM2_ACTIVE=0
+if /i "!SETUP_PM2!"=="y" (
+    echo.
+    echo  [--] Installing PM2 globally...
+    call npm install -g pm2
+    if !errorlevel! neq 0 (
+        echo  [WARN] PM2 install failed. You can try manually: npm install -g pm2
+        goto :skip_pm2
+    )
+
+    echo  [--] Starting vps-sender via PM2...
+    pm2 start ecosystem.config.js
+    if !errorlevel! neq 0 (
+        echo  [WARN] PM2 start failed. Try: pm2 start ecosystem.config.js
+        goto :skip_pm2
+    )
+
+    echo  [--] Saving PM2 process list...
+    pm2 save
+
+    echo  [OK] PM2 running
+    echo  [OK] Commands: pm2 status ^| pm2 logs vps-sender ^| pm2 restart vps-sender
+    set PM2_ACTIVE=1
+    goto :after_pm2
+)
+
+:skip_pm2
+echo  [OK] Skipped PM2
+
+:after_pm2
+
+:: ── 11. Determine the URL to display ────────────────────────────
+set GUI_URL=http://localhost:3000
+set PORT_VAL=3000
+
+for /f "tokens=*" %%p in ('node -e "try{const c=require('./config.json');process.stdout.write(String(c.port||3000))}catch(e){process.stdout.write('3000')}" 2^>nul') do set PORT_VAL=%%p
+
+if "!BIND_IS_PUBLIC!"=="1" (
+    :: Try to get the local IP via PowerShell
+    for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1 -ExpandProperty IPAddress) 2>$null" 2^>nul') do set LOCAL_IP=%%i
+    if "!LOCAL_IP!"=="" set LOCAL_IP=^<your-server-ip^>
+    set GUI_URL=http://!LOCAL_IP!:!PORT_VAL!
+) else (
+    set GUI_URL=http://localhost:!PORT_VAL!
+)
+
+:: ── Done ────────────────────────────────────────────────────────
 echo.
 echo  ============================================================
 echo   Setup complete!
 echo  ============================================================
 echo.
+echo   Web GUI:  !GUI_URL!
+echo.
 echo   NEXT STEPS:
 echo.
 echo   1. Edit mxemails.txt   — add your sender email addresses
 echo   2. Edit recipients.txt — add destination email addresses
-echo   3. Edit body.html      — customise your email
-echo   4. Run:  npm start     — opens Web GUI at localhost:3000
+echo   3. Edit body.html      — customise your email template
+
+if "!PM2_ACTIVE!"=="1" (
+    echo   4. Server is already running via PM2
+    echo.
+    echo   Useful PM2 commands:
+    echo     pm2 logs vps-sender       — live log stream
+    echo     pm2 restart vps-sender    — restart after config changes
+    echo     pm2 stop vps-sender       — stop the server
+) else (
+    echo   4. Run:  npm start     — opens the Web GUI
+    echo      Or:  npm run cli   — interactive command-line mode
+)
+
 echo.
 echo   Other commands:
-echo     npm run cli              — interactive command-line mode
 echo     npm run generate-dkim   — create DKIM keys for your domain
 echo     npm test                — run tests
 echo.
+if "%PORT25%"=="BLOCKED" (
+    echo  [WARN] Port 25 is blocked — configure a SOCKS5 proxy in the
+    echo         Settings tab before starting your first campaign.
+    echo.
+)
 echo  ============================================================
 echo.
 pause

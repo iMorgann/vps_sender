@@ -245,23 +245,52 @@
 
       <!-- Tab Content: File Manager -->
       <section class="tab-content" id="tab-file-manager">
+        <!-- File toolbar -->
+        <div class="file-toolbar">
+          <button class="btn btn-sm btn-secondary" id="btn-new-file">+ New File</button>
+          <button class="btn btn-sm btn-secondary" id="btn-upload-file">↑ Upload</button>
+          <button class="btn btn-sm btn-secondary" id="btn-download-file" disabled>↓ Download</button>
+          <button class="btn btn-sm btn-danger-sm"  id="btn-delete-file"   disabled>🗑 Delete</button>
+          <button class="btn btn-sm btn-secondary" id="btn-paste-clipboard" disabled>📋 Paste</button>
+          <input type="file" id="file-upload-input" multiple
+            accept=".txt,.csv,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.zip,.docx,.xlsx"
+            style="display:none">
+        </div>
+
         <div class="file-manager-grid">
           <!-- Files list -->
           <div class="panel files-sidebar">
-            <h3>Workspace Files</h3>
+            <h3>Text Files</h3>
             <ul class="file-list" id="file-list-ul">
               <!-- JS populated file list -->
             </ul>
           </div>
-          
-          <!-- File Editor -->
-          <div class="panel file-editor-panel">
+
+          <!-- File Editor with drag-drop -->
+          <div class="panel file-editor-panel" id="editor-drop-zone">
             <div class="editor-header">
               <h3 id="editing-file-name">Select a file to edit</h3>
               <button class="btn btn-primary btn-sm" id="btn-save-file" disabled>Save Changes</button>
             </div>
-            <textarea id="file-editor" class="code-editor" placeholder="File contents will load here..." disabled></textarea>
+            <div class="drop-overlay" id="drop-overlay" style="display:none">
+              Drop files here to upload
+            </div>
+            <textarea id="file-editor" class="code-editor" placeholder="Select a file from the list, or drop a file here to upload..." disabled></textarea>
           </div>
+        </div>
+
+        <!-- Attachment Files panel -->
+        <div class="panel attachments-panel" style="margin-top:1rem">
+          <div class="panel-header">
+            <h3>Attachment Files <small class="text-dim">(PDF, images, ZIP, DOCX…)</small></h3>
+            <button class="btn btn-sm btn-secondary" id="btn-upload-attachment">↑ Upload Attachment</button>
+            <input type="file" id="attachment-upload-input" multiple
+              accept=".pdf,.png,.jpg,.jpeg,.gif,.zip,.docx,.xlsx"
+              style="display:none">
+          </div>
+          <ul class="attachment-list" id="attachment-list-ul">
+            <li class="text-dim" id="attachment-empty-msg">No attachment files in workspace.</li>
+          </ul>
         </div>
       </section>
 
@@ -425,6 +454,117 @@
                 <input type="checkbox" id="settings-tls-reject"> Reject invalid TLS certificates
               </label>
               <small class="form-hint">Uncheck to allow self-signed certs on receiving MTAs</small>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">Server Access</h3>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="settings-bind-host">Bind Address</label>
+                <select id="settings-bind-host" class="form-control">
+                  <option value="127.0.0.1">127.0.0.1 — localhost only (safe default)</option>
+                  <option value="0.0.0.0">0.0.0.0 — public network (set API token!)</option>
+                </select>
+                <small class="form-hint">Restart the server after changing this</small>
+              </div>
+              <div class="form-group">
+                <label for="settings-port">Port</label>
+                <input type="number" id="settings-port" class="form-control" value="3000" min="1024" max="65535">
+                <small class="form-hint">TCP port the web GUI listens on</small>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-domain">Custom Domain (optional)</label>
+              <input type="text" id="settings-domain" class="form-control" placeholder="mail.yourdomain.com">
+              <small class="form-hint">Used for CORS and the public URL display below</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-api-token">API Token</label>
+              <input type="text" id="settings-api-token" class="form-control" placeholder="Leave blank to clear; type to set">
+              <small class="form-hint">Required for public access. Sent via X-API-Token header or ?token= query.</small>
+            </div>
+
+            <div class="warning-badge" id="public-no-token-warning" style="display:none">
+              ⚠ You have enabled public binding (0.0.0.0) without an API token.
+              Anyone on the internet can access and control this server.
+            </div>
+
+            <div class="form-group" id="public-url-group" style="display:none">
+              <label>Public URL</label>
+              <div class="public-url-display">
+                <span id="public-url-text" class="text-glow"></span>
+                <button type="button" class="btn btn-sm btn-secondary" id="btn-copy-url">Copy</button>
+              </div>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">Sending Options</h3>
+
+            <div class="form-group">
+              <label for="settings-sending-ip">Sending IP</label>
+              <input type="text" id="settings-sending-ip" class="form-control" placeholder="auto">
+              <small class="form-hint">Source IP for outbound SMTP connections. Leave "auto" to detect from interface.</small>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>
+                  <input type="checkbox" id="settings-direct-mx"> Direct-to-MX only
+                </label>
+                <small class="form-hint">Always resolve MX and connect directly (skip relay)</small>
+              </div>
+              <div class="form-group">
+                <label>
+                  <input type="checkbox" id="settings-allow-weak"> Allow weak domains
+                </label>
+                <small class="form-hint">Send from domains regardless of SPF/DMARC strength</small>
+              </div>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">Send Warmup</h3>
+
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="settings-warmup-enabled"> Enable warmup mode
+              </label>
+              <small class="form-hint">Gradually increase daily send volume to build sender reputation</small>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="settings-warmup-daily">Daily Limit</label>
+                <input type="number" id="settings-warmup-daily" class="form-control" value="100" min="1">
+                <small class="form-hint">Max emails per day during warmup</small>
+              </div>
+              <div class="form-group">
+                <label for="settings-warmup-increment">Daily Increment</label>
+                <input type="number" id="settings-warmup-increment" class="form-control" value="50" min="1">
+                <small class="form-hint">Increase the daily limit by this amount each day</small>
+              </div>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">Rate Limits</h3>
+
+            <div class="form-group">
+              <label for="settings-rate-limits">Per-provider rate limits (JSON)</label>
+              <textarea id="settings-rate-limits" class="form-control code-editor" rows="7" style="resize:vertical;min-height:120px"></textarea>
+              <small class="form-hint">Per-minute and per-hour caps keyed by provider domain. Invalid JSON is ignored on save.</small>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">DKIM Configuration</h3>
+
+            <div class="form-group">
+              <label for="settings-dkim">DKIM config (JSON)</label>
+              <textarea id="settings-dkim" class="form-control code-editor" rows="7"
+                style="resize:vertical;min-height:120px"
+                placeholder='{"yourdomain.com":{"domainName":"yourdomain.com","keySelector":"mail","privateKeyPath":"./dkim/yourdomain.com/private.pem"}}'></textarea>
+              <small class="form-hint">Generate keys: <code>npm run generate-dkim</code>. Invalid JSON is ignored on save.</small>
             </div>
 
             <button type="submit" class="btn btn-primary btn-glow">Save Configuration</button>

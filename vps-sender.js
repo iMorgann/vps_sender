@@ -16,6 +16,7 @@ const fs       = require("fs");
 const path     = require("path");
 const os       = require("os");
 const readline = require("readline");
+const crypto   = require("crypto");
 
 // ── Lib modules ───────────────────────────────────────────────────────────────
 const logger             = require("./lib/logger");
@@ -44,6 +45,8 @@ function loadConfig() {
     resultsFile:           "results.csv",
     apiToken:              "",
     bindHost:              "127.0.0.1",
+    port:                  3000,
+    domain:                "",
     dkim:                  {},
     rateLimits: {
       default:       { perMinute: 30, perHour: 500 },
@@ -68,7 +71,7 @@ function getCachedConfig() {
 function saveConfig(patch) {
   const cur = loadConfig();
   _configCache = null; // invalidate cache on write
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...cur, ...patch }, null, 2)); } catch {}
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...cur, ...patch }, null, 2));
 }
 
 // ── Proxy ──────────────────────────────────────────────────────────────────────
@@ -582,11 +585,21 @@ async function runSender(smtpEntries, cfg) {
   console.log(`  ╚══════════════════════════════════════════╝${C.reset}\n`);
 }
 
+// ── Web GUI Server helpers (module-level to avoid per-request recreation) ─────
+const TEXT_EXTS    = new Set([".txt", ".csv", ".html", ".htm"]);
+const ALL_EXTS     = new Set([".txt", ".csv", ".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".zip", ".docx", ".xlsx"]);
+const CWD_RESOLVED = path.resolve(process.cwd());
+function safeWorkspacePath(name) {
+  if (!name || typeof name !== "string") return null;
+  const p = path.resolve(CWD_RESOLVED, path.basename(name));
+  return p.startsWith(CWD_RESOLVED + path.sep) ? p : null;
+}
+
 // ── Web GUI Server ─────────────────────────────────────────────────────────────
 async function startWebServer() {
   const http   = require("http");
   const cfg    = loadConfig();
-  const port   = parseInt(process.env.PORT || "3000", 10);
+  const port   = parseInt(process.env.PORT || cfg.port || "3000", 10);
   const host   = cfg.bindHost || "127.0.0.1";
 
   if (cfg.proxyUrl) PROXY = parseProxyUrl(cfg.proxyUrl);
@@ -595,28 +608,50 @@ async function startWebServer() {
     const url      = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const pathname = url.pathname;
 
+    // ── CORS (must be set before auth so OPTIONS preflight succeeds) ──────
+    const origin    = req.headers.origin || "";
+    const boundHost = getCachedConfig().bindHost || "127.0.0.1";
+    const cfgDomain = getCachedConfig().domain   || "";
+    let allowOrigin = "";
+    const localhostPat = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+    if (boundHost === "127.0.0.1") {
+      if (origin && !origin.match(localhostPat)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Forbidden" }));
+        return;
+      }
+      allowOrigin = origin || "*";
+    } else {
+      if (cfgDomain) {
+        const cfgDomainEsc = cfgDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const domainPat = new RegExp(`^https?://${cfgDomainEsc}(:\\d+)?$`);
+        const allowed   = !origin || origin.match(localhostPat) || origin.match(domainPat);
+        allowOrigin = allowed ? (origin || "*") : "";
+      } else {
+        allowOrigin = "*";
+      }
+    }
+    if (allowOrigin) res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Token");
+    // OPTIONS preflight must return before auth — browsers never send credentials in preflight
+    if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
     // ── Auth (optional API token) ──────────────────────────────────────────
     const token = getCachedConfig().apiToken;
-    if (token && !pathname.startsWith("/api/stream")) {
-      const auth = req.headers["x-api-token"] || url.searchParams.get("token");
-      if (auth !== token) {
+    if (token) {
+      const auth = req.headers["x-api-token"] || url.searchParams.get("token") || "";
+      // Timing-safe comparison to prevent token enumeration via response time
+      const tokenBuf = Buffer.from(token);
+      const authBuf  = Buffer.alloc(tokenBuf.length);
+      Buffer.from(auth.slice(0, tokenBuf.length)).copy(authBuf);
+      const valid = auth.length === token.length && crypto.timingSafeEqual(tokenBuf, authBuf);
+      if (!valid) {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Unauthorized" }));
         return;
       }
     }
-
-    // ── CORS — restricted to localhost ─────────────────────────────────────
-    const origin = req.headers.origin || "";
-    if (origin && !origin.match(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Forbidden" }));
-      return;
-    }
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Token");
-    if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
     // ── Static assets ──────────────────────────────────────────────────────
     const staticMap = {
@@ -640,16 +675,32 @@ async function startWebServer() {
       return;
     }
 
-    async function getJsonBody(maxBytes = 2 * 1024 * 1024) {
+    async function getJsonBody(maxBytes) {
+      if (maxBytes === undefined) {
+        maxBytes = pathname === "/api/files/upload" ? 15 * 1024 * 1024 : 2 * 1024 * 1024;
+      }
       return new Promise((resolve, reject) => {
-        let body = "", size = 0;
+        const chunks = [];
+        let size = 0;
+        let done = false;
         req.on("data", c => {
           size += c.length;
-          if (size > maxBytes) { req.destroy(); return reject(new Error("Payload too large")); }
-          body += c.toString();
+          if (size > maxBytes) {
+            done = true;
+            req.destroy();
+            reject(new Error("Payload too large"));
+            return;
+          }
+          chunks.push(c);
         });
-        req.on("end", () => { try { resolve(body ? JSON.parse(body) : {}); } catch(e) { reject(e); } });
-        req.on("error", reject);
+        req.on("end", () => {
+          if (done) return;
+          try {
+            const body = chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
+            resolve(body ? JSON.parse(body) : {});
+          } catch (e) { reject(e); }
+        });
+        req.on("error", e => { if (!done) reject(e); });
       });
     }
 
@@ -683,6 +734,19 @@ async function startWebServer() {
           tlsRejectUnauthorized: config.tlsRejectUnauthorized !== false,
           concurrency:           config.concurrency ?? 2,
           unsubscribeBaseUrl:    config.unsubscribeBaseUrl || "",
+          bindHost:              config.bindHost || "127.0.0.1",
+          port:                  config.port || 3000,
+          domain:                config.domain || "",
+          apiToken:              config.apiToken ? "***" : "",
+          sendingIp:             config.sendingIp || "auto",
+          directToMxOnly:        config.directToMxOnly !== false,
+          warmup: {
+            enabled:         !!(config.warmup && config.warmup.enabled),
+            dailyLimit:      (config.warmup && config.warmup.dailyLimit != null) ? config.warmup.dailyLimit : 100,
+            incrementPerDay: (config.warmup && config.warmup.incrementPerDay != null) ? config.warmup.incrementPerDay : 50,
+          },
+          rateLimits: config.rateLimits || {},
+          dkim:       config.dkim       || {},
         }));
         return;
       }
@@ -691,14 +755,76 @@ async function startWebServer() {
         const body = await getJsonBody();
         if (body.concurrency !== undefined) {
           const c = parseInt(body.concurrency, 10);
-          body.concurrency = Number.isFinite(c) && c >= 1 ? c : 2;
+          body.concurrency = Number.isFinite(c) && c >= 1 && c <= 100 ? c : 2;
         }
         if (body.sendDelay !== undefined) {
           const d = parseInt(body.sendDelay, 10);
-          body.sendDelay = Number.isFinite(d) && d >= 0 ? d : 1200;
+          body.sendDelay = Number.isFinite(d) && d >= 0 ? d : 1500;
+        }
+        if (body.greylistWait !== undefined) {
+          const g = parseInt(body.greylistWait, 10);
+          body.greylistWait = Number.isFinite(g) && g >= 0 ? g : 60000;
+        }
+        if (body.bindHost !== undefined) {
+          body.bindHost = body.bindHost === "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
+        }
+        if (body.port !== undefined) {
+          const p = parseInt(body.port, 10);
+          body.port = Number.isFinite(p) && p >= 1024 && p <= 65535 ? p : 3000;
+        }
+        if (body.domain !== undefined) {
+          body.domain = String(body.domain).replace(/[\r\n]/g, "").trim();
+        }
+        if (body.resultsFile !== undefined) {
+          // Strip any path components — only a bare filename is allowed
+          body.resultsFile = path.basename(String(body.resultsFile).trim()) || "results.csv";
+        }
+        if (body.apiToken === "***") {
+          delete body.apiToken; // sentinel — keep existing token unchanged
+        }
+        if (body.tlsRejectUnauthorized !== undefined) {
+          body.tlsRejectUnauthorized = !!body.tlsRejectUnauthorized;
+        }
+        if (body.heloHost !== undefined) {
+          // Strip newlines to prevent SMTP command injection via EHLO
+          body.heloHost = String(body.heloHost).replace(/[\r\n]/g, "").trim();
+        }
+        if (body.unsubscribeBaseUrl !== undefined) {
+          body.unsubscribeBaseUrl = String(body.unsubscribeBaseUrl).replace(/[\r\n]/g, "").trim();
+        }
+        if (body.sendingIp !== undefined) {
+          body.sendingIp = String(body.sendingIp).trim() || "auto";
+        }
+        if (body.directToMxOnly !== undefined) {
+          body.directToMxOnly = !!body.directToMxOnly;
+        }
+        if (body.allowWeakDomains !== undefined) {
+          body.allowWeakDomains = !!body.allowWeakDomains;
+        }
+        if (body.warmup !== undefined) {
+          if (typeof body.warmup === "object" && body.warmup !== null && !Array.isArray(body.warmup)) {
+            body.warmup = {
+              enabled:         !!body.warmup.enabled,
+              dailyLimit:      Math.max(1, parseInt(body.warmup.dailyLimit, 10) || 100),
+              incrementPerDay: Math.max(1, parseInt(body.warmup.incrementPerDay, 10) || 50),
+            };
+          } else { delete body.warmup; }
+        }
+        if (body.rateLimits !== undefined) {
+          if (typeof body.rateLimits !== "object" || Array.isArray(body.rateLimits) || body.rateLimits === null) {
+            delete body.rateLimits;
+          }
+        }
+        if (body.dkim !== undefined) {
+          if (typeof body.dkim !== "object" || Array.isArray(body.dkim) || body.dkim === null) {
+            delete body.dkim;
+          }
         }
         saveConfig(body);
         if (body.proxyUrl !== undefined) PROXY = body.proxyUrl ? parseProxyUrl(body.proxyUrl) : null;
+        if (body.bindHost === "0.0.0.0" && !getCachedConfig().apiToken) {
+          logger.warn("public_binding_no_token", { msg: "GUI bound to 0.0.0.0 with no API token — anyone can access it" });
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -731,21 +857,23 @@ async function startWebServer() {
 
       // ── File API ─────────────────────────────────────────────────────────
       if (req.method === "GET" && pathname === "/api/files") {
-        const allowed = new Set([".txt", ".csv", ".html", ".htm"]);
-        const files   = fs.readdirSync(process.cwd(), { withFileTypes: true })
-          .filter(e => e.isFile() && allowed.has(path.extname(e.name).toLowerCase()))
-          .map(e => e.name);
+        const entries = fs.readdirSync(process.cwd(), { withFileTypes: true });
+        const textFiles   = entries.filter(e => e.isFile() && TEXT_EXTS.has(path.extname(e.name).toLowerCase())).map(e => e.name);
+        const binaryFiles = entries.filter(e => e.isFile() && !TEXT_EXTS.has(path.extname(e.name).toLowerCase()) &&
+                                                 ALL_EXTS.has(path.extname(e.name).toLowerCase()))
+                                   .map(e => {
+                                     const stat = fs.statSync(path.join(process.cwd(), e.name));
+                                     return { name: e.name, size: stat.size };
+                                   });
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ files }));
+        res.end(JSON.stringify({ files: textFiles, attachments: binaryFiles }));
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/files/read") {
-        const ALLOWED_EDIT_EXTS = new Set([".txt", ".csv", ".html", ".htm"]);
-        const name = url.searchParams.get("name");
-        const filepath = name ? path.resolve(process.cwd(), name) : "";
-        if (!name || !filepath.startsWith(path.resolve(process.cwd()) + path.sep) ||
-            !ALLOWED_EDIT_EXTS.has(path.extname(filepath).toLowerCase())) {
+        const name     = url.searchParams.get("name");
+        const filepath = safeWorkspacePath(name);
+        if (!filepath || !TEXT_EXTS.has(path.extname(filepath).toLowerCase())) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid filename" }));
           return;
@@ -756,17 +884,76 @@ async function startWebServer() {
       }
 
       if (req.method === "POST" && pathname === "/api/files/save") {
-        const ALLOWED_EDIT_EXTS = new Set([".txt", ".csv", ".html", ".htm"]);
         const body = await getJsonBody();
         const { name, content } = body;
-        const filepath = name ? path.resolve(process.cwd(), name) : "";
-        if (!name || !filepath.startsWith(path.resolve(process.cwd()) + path.sep) ||
-            !ALLOWED_EDIT_EXTS.has(path.extname(filepath).toLowerCase())) {
+        const filepath = safeWorkspacePath(name);
+        if (!filepath || !TEXT_EXTS.has(path.extname(filepath).toLowerCase())) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid filename" }));
           return;
         }
+        if (typeof content !== "string") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "content must be a string" }));
+          return;
+        }
         fs.writeFileSync(filepath, content, "utf8");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/files/download") {
+        const name     = url.searchParams.get("name");
+        const filepath = safeWorkspacePath(name);
+        if (!filepath || !ALL_EXTS.has(path.extname(filepath).toLowerCase()) || !fs.existsSync(filepath)) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "File not found" }));
+          return;
+        }
+        const safeName = path.basename(filepath).replace(/"/g, "");
+        res.writeHead(200, {
+          "Content-Type":        "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${safeName}"`,
+          "Content-Length":      fs.statSync(filepath).size,
+        });
+        fs.createReadStream(filepath).pipe(res);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/files/upload") {
+        const body = await getJsonBody(); // up to 15 MB for this route
+        const { name, data, encoding } = body;
+        const filepath = safeWorkspacePath(name);
+        if (!filepath || !ALL_EXTS.has(path.extname(filepath).toLowerCase())) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid filename or extension" }));
+          return;
+        }
+        if (typeof data !== "string") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "data must be a string" }));
+          return;
+        }
+        if (encoding === "base64") {
+          fs.writeFileSync(filepath, Buffer.from(data, "base64"));
+        } else {
+          fs.writeFileSync(filepath, data, "utf8");
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/files/delete") {
+        const body     = await getJsonBody();
+        const filepath = safeWorkspacePath(body.name);
+        if (!filepath || !ALL_EXTS.has(path.extname(filepath).toLowerCase()) || !fs.existsSync(filepath)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "File not found" }));
+          return;
+        }
+        fs.unlinkSync(filepath);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -794,19 +981,20 @@ async function startWebServer() {
           return;
         }
         const body = await getJsonBody();
-        const rawFile = body.file ? path.resolve(process.cwd(), body.file) : "";
-        if (!body.file || !rawFile.startsWith(path.resolve(process.cwd()) + path.sep)) {
+        const rawFile = safeWorkspacePath(body.file);
+        if (!rawFile) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid or missing source file" }));
           return;
         }
         const rawOutput  = (body.output && body.output.trim()) ? body.output.trim() : "smtp.txt";
-        const outputFile = path.resolve(process.cwd(), rawOutput);
-        if (!outputFile.startsWith(path.resolve(process.cwd()) + path.sep)) {
+        const outputFile = safeWorkspacePath(rawOutput) || safeWorkspacePath("smtp.txt");
+        if (!outputFile) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid output path" }));
           return;
         }
+        campaignCancelToken = { cancelled: false, paused: false }; // reset so a prior stop doesn't immediately abort the scan
         const allFromEmails  = readLines(rawFile).filter(l => l.includes("@"));
         runWebScanner(allFromEmails, body.includeWeak, outputFile).catch(err => {
           broadcastSSE({ type: "log", text: `Scan error: ${err.message}`, logClass: "fail" });
@@ -839,7 +1027,8 @@ async function startWebServer() {
           return r.startsWith(cwd + sep) ? r : null;
         }
         const safe = {};
-        if (body.smtpFile        !== undefined) safe.smtpFile        = safeFilePath(body.smtpFile)        || webCampaignConfig.smtpFile;
+        // "direct" is the wizard sentinel for "no SMTP file — use direct-to-MX"; must NOT be path-resolved
+        if (body.smtpFile !== undefined) safe.smtpFile = body.smtpFile === "direct" ? "direct" : (safeFilePath(body.smtpFile) || webCampaignConfig.smtpFile);
         if (body.recipientsFile  !== undefined) safe.recipientsFile  = safeFilePath(body.recipientsFile)  || webCampaignConfig.recipientsFile;
         if (body.namesFile       !== undefined) safe.namesFile       = body.namesFile === "" ? "" : (safeFilePath(body.namesFile) || webCampaignConfig.namesFile);
         if (body.subjectsFile    !== undefined) safe.subjectsFile    = safeFilePath(body.subjectsFile)    || webCampaignConfig.subjectsFile;
@@ -875,16 +1064,20 @@ async function startWebServer() {
       }
 
       if (req.method === "POST" && pathname === "/api/campaign/pause") {
-        campaignCancelToken.paused = true;
-        updateEngineStatus("paused");
+        if (engineState.status === "sending") {
+          campaignCancelToken.paused = true;
+          updateEngineStatus("paused");
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
         return;
       }
 
       if (req.method === "POST" && pathname === "/api/campaign/resume") {
-        campaignCancelToken.paused = false;
-        updateEngineStatus("sending");
+        if (engineState.status === "paused") {
+          campaignCancelToken.paused = false;
+          updateEngineStatus("sending");
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -902,22 +1095,36 @@ async function startWebServer() {
       res.end(JSON.stringify({ error: "Not found" }));
     } catch (e) {
       logger.error("request_error", { path: pathname, error: e.message });
-      res.writeHead(500, { "Content-Type": "application/json" });
+      const status = e.message === "Payload too large" ? 413 : 500;
+      res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: e.message }));
     }
   });
 
   server.listen(port, host, async () => {
-    const url = `http://localhost:${port}`;
-    console.log(`\n  ${g("✓")} ${b("Web GUI Dashboard running at:")} ${c(url)}\n`);
-    logger.info("server_started", { host, port });
+    const localUrl = `http://localhost:${port}`;
+    const bindUrl  = host === "0.0.0.0"
+      ? (getCachedConfig().domain ? `http://${getCachedConfig().domain}:${port}` : `http://<server-ip>:${port}`)
+      : localUrl;
+    console.log(`\n  ${g("✓")} ${b("Web GUI running at:")} ${c(localUrl)}`);
+    if (host === "0.0.0.0") {
+      console.log(`  ${g("✓")} ${b("Public URL:")} ${c(bindUrl)}`);
+      if (!getCachedConfig().apiToken) {
+        console.log(`\n  ${"\x1b[33m"}⚠  No API token set — GUI is open to the internet!${"\x1b[0m"}`);
+        console.log(`  Set one via Settings in the web UI or in config.json.\n`);
+      }
+    }
+    console.log("");
+    logger.info("server_started", { host, port, public: host === "0.0.0.0" });
 
-    // Cross-platform browser open
-    try {
-      const open = require("open");
-      await open(url);
-    } catch {
-      try { require("child_process").exec(`start ${url}`); } catch { /**/ }
+    // Cross-platform browser open (only when binding to localhost)
+    if (host === "127.0.0.1") {
+      try {
+        const open = require("open");
+        await open(localUrl);
+      } catch {
+        try { require("child_process").exec(`start ${localUrl}`); } catch { /**/ }
+      }
     }
   });
 
@@ -963,8 +1170,12 @@ async function runWebScanner(emails, includeWeak, outputFile) {
     broadcastSSE({ type: "scan_progress", results, done: false });
   }, campaignCancelToken);
 
-  const cfg     = getCachedConfig();
-  const passing = results.filter(d => d.hasMx && d.port25Open);
+  const passing = results.filter(d => {
+    if (!d.hasMx || !d.port25Open) return false;
+    // When includeWeak is false, exclude domains with only soft/no SPF or no DMARC enforcement
+    if (!includeWeak && (d.spfStrength !== "hard" || d.dmarcPolicy === "none")) return false;
+    return true;
+  });
   const smtpEntries = passing.flatMap(d => (d.emails || []).map(email => ({ host: d.mx, fromEmail: email })));
   saveSmtpConfig(smtpEntries, outputFile);
 
@@ -1052,9 +1263,9 @@ async function runWebCampaign() {
     type: "campaign_progress",
     stats: {
       ...stats,
-      sent:      totalSent,           // cumulative (new + resumed)
-      reachable: newSent + stats.failed,
-      total:     newSent + stats.failed + stats.dropped,
+      sent:      totalSent,                         // cumulative (new + resumed)
+      reachable: totalSent + stats.failed,          // denominator must match sent so pct ≤ 100
+      total:     totalSent + stats.failed + stats.dropped,
     },
     speed:   0,
     elapsed: 0,

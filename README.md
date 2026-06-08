@@ -1,6 +1,6 @@
 # VPS Sender v2 — Direct-to-MX Email Sender
 
-Send email **directly to recipient mail servers** — no third-party relay, no API keys, no monthly fees. Features rotating senders, DKIM signing, smart retries, rate limiting, SQLite state, and a live Web GUI dashboard.
+Send email **directly to recipient mail servers** — no third-party relay, no API keys, no monthly fees. Features rotating senders, DKIM signing, smart retries, rate limiting, SQLite state, and a live Web GUI dashboard fully manageable from the browser.
 
 ---
 
@@ -30,25 +30,19 @@ The script handles everything automatically:
 
 | Step | What happens |
 |------|-------------|
-| Node.js missing | Auto-installs Node.js 20 LTS via **winget** (built into Windows 10/11) |
-| Build tools missing | Auto-installs Visual Studio Build Tools via winget (needed for SQLite) |
+| Node.js missing | Auto-installs Node.js 20 LTS via **winget** |
+| Build tools missing | Auto-installs Visual Studio Build Tools via winget |
 | `npm install` | Installs all dependencies; retries with build tools if first attempt fails |
 | Directories | Creates `logs\` and `dkim\` |
 | Starter files | Creates `mxemails.txt`, `recipients.txt`, `subjects.txt`, `names.txt`, `body.html` if not present |
 | Port 25 check | Tests outbound port 25 and tells you if it's open or blocked |
+| Firewall | Adds Windows Firewall rule to allow inbound TCP on port 3000 |
+| Public access | Prompts whether to bind to `0.0.0.0`; lets you set an API token |
+| PM2 | Optionally installs PM2 and starts the server as a persistent background process |
 
 **If winget isn't available** (older Windows):
 1. Download and install Node.js 20 LTS from [nodejs.org](https://nodejs.org/en/download)
 2. Re-run `install.bat`
-
-**If `npm install` still fails** after the script tries to fix build tools:
-```bat
-:: Option A — install build tools manually, then re-run
-winget install Microsoft.VisualStudio.2022.BuildTools
-
-:: Option B — skip native compilation (SQLite disabled, everything else works)
-npm install --ignore-scripts
-```
 
 ---
 
@@ -68,29 +62,20 @@ The script handles everything automatically:
 |------|-------------|
 | `curl` missing | Installs curl via the system package manager |
 | Node.js missing / outdated | Adds the NodeSource repo and installs Node.js 20 LTS |
-| Build tools missing | Installs `build-essential` + `python3` (needed for SQLite) |
-| `apt-get update` | Runs automatically before any package installs |
+| Build tools missing | Installs `build-essential` + `python3` |
 | `npm install` | Installs all dependencies |
 | Directories | Creates `logs/` and `dkim/` |
 | Starter files | Creates all 5 starter files if not present |
 | Port 25 check | Tests outbound port 25 using `nc` / `/dev/tcp` / `curl` |
-| UFW firewall | Detects if UFW is active and tells you how to expose the GUI port |
+| Firewall | Opens port 3000 in UFW (Ubuntu/Debian) or firewalld (Fedora/RHEL) |
+| Public access | Prompts whether to bind to `0.0.0.0`; sets API token in `config.json` |
+| PM2 | Optionally installs PM2, starts the server, and configures auto-start on reboot |
 
 **Supported package managers:** `apt` (Ubuntu/Debian), `dnf` (Fedora/RHEL), `yum` (CentOS)
 
 **Fresh Ubuntu VPS — exact commands:**
 ```bash
-# Upload or clone the project, then:
 cd vps-sender
-bash install.sh
-npm start
-```
-
-**If you're behind a corporate firewall or apt is slow:**
-```bash
-# You can also install Node.js manually first, then run the script
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs build-essential python3
 bash install.sh
 ```
 
@@ -102,15 +87,13 @@ bash install.sh
 bash install.sh
 ```
 
-- Installs Node.js via Homebrew if missing (`brew install node@20`)
+- Installs Node.js via Homebrew (`brew install node@20`)
 - Prompts to install Xcode Command Line Tools if build tools are missing
 - Everything else is the same as Linux
 
 ---
 
 ### Manual (any platform)
-
-If you prefer to do it yourself:
 
 ```bash
 # 1. Install Node.js 18+ from https://nodejs.org
@@ -131,9 +114,17 @@ mkdir -p logs dkim
 
 ## Quick Start
 
-### 1. Prepare your files
+### 1. Launch the Web GUI
 
-Place these in the project folder:
+```bash
+npm start
+```
+
+Opens **http://localhost:3000** automatically.
+
+### 2. Prepare your files via the browser
+
+Use the **Workspace Files** tab to upload, edit, paste, or create:
 
 | File | What goes in it |
 |------|----------------|
@@ -143,190 +134,12 @@ Place these in the project folder:
 | `names.txt` | Sender display names, one per line (rotates) |
 | `body.html` | Your HTML email body |
 
-### 2. Launch the Web GUI
-
-```bash
-npm start
-```
-
-Opens **http://localhost:3000** automatically.
+Upload PDF/image/ZIP attachments from the **Attachment Files** panel below the editor.
 
 ### 3. Or use the interactive CLI
 
 ```bash
 npm run cli
-```
-
-Pick a mode:
-```
-1  Scanner only   — scan mxemails.txt → save smtp.txt
-2  Send only      — load smtp.txt + send
-3  Scan + Send    — do both in one run
-4  Start Web GUI
-```
-
----
-
-## DKIM Setup (Recommended)
-
-DKIM signs your outgoing mail cryptographically. Gmail and Yahoo require it for bulk senders.
-
-```bash
-npm run generate-dkim
-# Follow the prompts — enter your sending domain and selector (default: mail)
-```
-
-This creates:
-- `dkim/yourdomain.com/private.pem` — keep this secret, never commit it
-- `dkim/yourdomain.com/dns.txt` — the DNS TXT record to publish
-
-**Publish the DNS record**, then add to `config.json`:
-
-```json
-{
-  "dkim": {
-    "yourdomain.com": {
-      "domainName": "yourdomain.com",
-      "keySelector": "mail",
-      "privateKeyPath": "./dkim/yourdomain.com/private.pem"
-    }
-  }
-}
-```
-
-Verify it propagated:
-```bash
-dig TXT mail._domainkey.yourdomain.com
-```
-
----
-
-## Configuration (`config.json`)
-
-Auto-created on first run with safe defaults. Edit by hand or via the Settings tab in the Web GUI.
-
-```json
-{
-  "proxyUrl": "",
-  "sendingIp": "auto",
-  "heloHost": "mail.yourdomain.com",
-  "allowWeakDomains": true,
-  "tlsRejectUnauthorized": true,
-  "concurrency": 2,
-  "sendDelay": 1500,
-  "greylistWait": 60000,
-  "resultsFile": "results.csv",
-  "apiToken": "",
-  "bindHost": "127.0.0.1",
-  "unsubscribeBaseUrl": "https://yourdomain.com/unsubscribe",
-  "dkim": {},
-  "rateLimits": {
-    "default":      { "perMinute": 30, "perHour": 500 },
-    "gmail.com":    { "perMinute": 10, "perHour": 200 },
-    "outlook.com":  { "perMinute": 10, "perHour": 200 }
-  }
-}
-```
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `heloHost` | `mail.localhost` | Hostname presented in SMTP EHLO — should match your server's PTR/rDNS record |
-| `allowWeakDomains` | `true` | Send from any domain regardless of SPF/DMARC (shows warnings) |
-| `tlsRejectUnauthorized` | `true` | Verify MX TLS certificates. Set `false` only if connecting to servers with self-signed certs |
-| `concurrency` | `2` | Parallel sends (1–5 recommended) |
-| `sendDelay` | `1500` | Milliseconds between sends (sequential mode) |
-| `greylistWait` | `60000` | Ms to wait before retrying a `4xx` greylisting response |
-| `bindHost` | `127.0.0.1` | Web GUI listen address. Set to `0.0.0.0` to expose on LAN (add firewall rules) |
-| `apiToken` | `""` | Require `X-API-Token` header on all API calls (leave empty to disable) |
-| `unsubscribeBaseUrl` | `""` | Base URL for `List-Unsubscribe` header and `{{unsubscribe_url}}` template var |
-| `rateLimits` | see above | Per-provider per-minute and per-hour caps |
-
----
-
-## Template Variables
-
-Use `{{variable}}` in subject lines and HTML body files:
-
-| Variable | Value |
-|----------|-------|
-| `{{email}}` | Full recipient address: `john@example.com` |
-| `{{domain}}` | Recipient domain: `example.com` |
-| `{{name}}` | Sender display name from `names.txt` |
-| `{{unsubscribe_url}}` | One-click unsubscribe URL (requires `unsubscribeBaseUrl` in config) |
-
-**Example subject:**
-```
-We noticed your site at {{domain}} — quick question
-```
-
-**Example body:**
-```html
-<p>Hi there,</p>
-<p>We came across <strong>{{domain}}</strong> and wanted to reach out.</p>
-<p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>
-```
-
----
-
-## Workspace File Reference
-
-All files are resolved relative to the working directory.
-
-### `mxemails.txt` — Sender Candidates
-One email per line. The scanner checks each domain for MX, SPF, DMARC, and port 25.
-```
-alice@yourdomain.com
-bob@anotherdomain.net
-```
-
-### `recipients.txt` — Destination Leads
-Any format — the tool auto-extracts valid email addresses.
-```
-user1@gmail.com
-user2@yahoo.com, user3@hotmail.com
-"John Doe" <johndoe@example.com>
-```
-
-### `subjects.txt` — Email Subjects
-One per line. Rotates round-robin across recipients.
-```
-Quick question about {{domain}}
-Following up — important update
-Your exclusive offer is ready
-```
-
-### `names.txt` — Display Names
-One per line. Rotates alongside subjects.
-```
-Michael
-Sarah
-David
-```
-
-### `body.html` — Email Body
-Standard HTML with optional template variables. You can select multiple body files in the Campaign Wizard — they rotate per recipient.
-
-### `smtp.txt` — Sender Config (auto-generated by scanner)
-```
-[SMTP.1]
-enabled      = true
-host         = mail.sender1.com
-port         = 25
-fromEmail    = alice@sender1.com
-allowPooling = true
-
-[SMTP.2]
-enabled      = true
-host         = mail.sender2.net
-fromEmail    = bob@sender2.net
-allowPooling = true
-```
-
-### `suppression.txt` — Unsubscribe List (optional)
-One email per line. These addresses are silently skipped before any campaign starts.
-```
-optout@example.com
-noemail@domain.com
 ```
 
 ---
@@ -346,21 +159,10 @@ Real-time campaign control:
 - **Live log** — Color-coded stream of every delivery attempt
 - **Chart** — Donut breakdown of results
 
-Engine states:
-
-| Badge | Meaning |
-|-------|---------|
-| Idle | No campaign running |
-| Scanning | MX/port 25 pre-scan |
-| Sending | Active delivery |
-| Paused | User-paused or waiting on greylist retry |
-| Done | Campaign finished |
-
 ### Campaign Wizard Tab
 Configure before launching:
 - Recipient file, names file, subjects file, HTML body file(s)
-- SMTP config file (`smtp.txt`)
-- Optional attachments
+- SMTP config file (`smtp.txt`), optional attachments
 - Rotate sender every N emails
 - Resume mode (skip already-sent addresses)
 
@@ -371,22 +173,217 @@ Evaluate sender domains before committing to a campaign:
 3. Click **Start Scan** — results table shows MX, port 25 status, SPF, DMARC
 4. Saves usable entries to `smtp.txt`
 
-### Sender Health Tab
-Check a single domain's full deliverability status:
-- SPF record strength
-- DKIM public key presence
-- DMARC policy
-- PTR / rDNS record for your sending IP
-- Clear **Green / Yellow** status with actionable tips
-
 ### Mail Previewer Tab
 Preview your rendered email before sending — enter a test recipient, sender, and subject to see the final output with template variables applied.
 
 ### Workspace Files Tab
-Browse and edit any file in the working directory directly in the browser. Save changes instantly.
+Full file management directly in the browser — no SSH required:
+
+| Action | How |
+|--------|-----|
+| **Edit** | Click a file in the list → edit in the code pane → Save |
+| **Create** | Click **+ New File** → enter a name |
+| **Upload** | Click **↑ Upload** or drag files onto the editor panel |
+| **Paste** | Open a file, click **📋 Paste** to paste clipboard content |
+| **Download** | Select a file → click **↓ Download** |
+| **Delete** | Select a file → click **🗑 Delete** |
+| **Attachments** | Upload binary files (PDF, images, ZIP, DOCX) in the Attachments panel below the editor; download or delete them there too |
+
+Drag-and-drop works on the editor panel — drop one or more files and they upload automatically. Text files open for editing immediately.
 
 ### Settings Tab
-Adjust proxy, delays, HELO hostname, TLS settings, and rate limits. All saved to `config.json`.
+All `config.json` fields are configurable from the browser. Sections:
+
+| Section | Fields |
+|---------|--------|
+| **General** | Proxy URL, send delay, greylist retry timeout, results file, HELO hostname, concurrency, unsubscribe URL, TLS validation |
+| **Server Access** | Bind address, port, custom domain, API token, public URL display |
+| **Sending Options** | Sending IP, direct-to-MX only, allow weak domains |
+| **Send Warmup** | Enable warmup, daily limit, daily increment |
+| **Rate Limits** | JSON editor for per-provider per-minute/per-hour caps |
+| **DKIM Configuration** | JSON editor for DKIM key paths per domain |
+
+---
+
+## Public Access (Remote Server)
+
+By default the GUI binds to `127.0.0.1` — accessible only via localhost or an SSH tunnel. To expose it on the public internet:
+
+### Option 1 — via install script (recommended)
+The install scripts ask during setup. Answer `y` when prompted for public binding and enter an API token.
+
+### Option 2 — via Settings tab in the browser
+1. Open **Settings & Proxy**
+2. Set **Bind Address** to `0.0.0.0 — public network`
+3. Set an **API Token** (strongly recommended — anyone who knows the URL can control the server otherwise)
+4. Click **Save Configuration**
+5. Restart the server: `pm2 restart vps-sender` or `npm start`
+
+### Option 3 — edit `config.json` directly
+```json
+{
+  "bindHost": "0.0.0.0",
+  "port": 3000,
+  "domain": "yourdomain.com",
+  "apiToken": "your-secret-token"
+}
+```
+
+Then restart the server.
+
+### API Token authentication
+When `apiToken` is set, every request must include it either as:
+- Header: `X-API-Token: your-secret-token`
+- Query string: `?token=your-secret-token` (used automatically by the browser GUI)
+
+The browser GUI reads the token from Settings and sends it on all API calls automatically. Set it once and the UI stays authenticated.
+
+> **SSH tunnel alternative:** If you don't want public access, use an SSH tunnel instead:
+> ```bash
+> ssh -L 3000:localhost:3000 user@your-server-ip
+> # then open http://localhost:3000 in your browser
+> ```
+
+---
+
+## Configuration (`config.json`)
+
+Auto-created on first run with safe defaults. Edit by hand, via the Settings tab in the Web GUI, or via the install scripts.
+
+```json
+{
+  "proxyUrl": "",
+  "sendingIp": "auto",
+  "heloHost": "mail.yourdomain.com",
+  "allowWeakDomains": true,
+  "directToMxOnly": true,
+  "tlsRejectUnauthorized": true,
+  "concurrency": 2,
+  "sendDelay": 1500,
+  "greylistWait": 60000,
+  "resultsFile": "results.csv",
+  "bindHost": "127.0.0.1",
+  "port": 3000,
+  "domain": "",
+  "apiToken": "",
+  "unsubscribeBaseUrl": "",
+  "warmup": {
+    "enabled": false,
+    "dailyLimit": 100,
+    "incrementPerDay": 50
+  },
+  "rateLimits": {
+    "default":      { "perMinute": 30, "perHour": 500 },
+    "gmail.com":    { "perMinute": 10, "perHour": 200 },
+    "outlook.com":  { "perMinute": 10, "perHour": 200 }
+  },
+  "dkim": {}
+}
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `proxyUrl` | `""` | SOCKS5 proxy. Format: `socks5://user:pass@host:port` |
+| `sendingIp` | `"auto"` | Source IP for outbound SMTP. `"auto"` detects it from the interface |
+| `heloHost` | `"mail.localhost"` | Hostname in SMTP EHLO — should match your VPS PTR/rDNS |
+| `allowWeakDomains` | `true` | Send from domains regardless of SPF/DMARC strength |
+| `directToMxOnly` | `true` | Always connect directly to MX servers (skip relay) |
+| `tlsRejectUnauthorized` | `true` | Verify MX TLS certificates. Set `false` for self-signed certs |
+| `concurrency` | `2` | Parallel SMTP connections (1–5 recommended) |
+| `sendDelay` | `1500` | Milliseconds between sends |
+| `greylistWait` | `60000` | Ms to wait before retrying a `4xx` greylisting response |
+| `resultsFile` | `"results.csv"` | CSV log of all delivery attempts |
+| `bindHost` | `"127.0.0.1"` | GUI listen address. `"0.0.0.0"` = public |
+| `port` | `3000` | TCP port the web GUI listens on |
+| `domain` | `""` | Custom domain for CORS and the public URL shown in Settings |
+| `apiToken` | `""` | Required `X-API-Token` header value. Empty = no auth |
+| `unsubscribeBaseUrl` | `""` | Base URL for `List-Unsubscribe` and `{{unsubscribe_url}}` variable |
+| `warmup.enabled` | `false` | Gradually increase volume each day to build sender reputation |
+| `warmup.dailyLimit` | `100` | Max emails per day during warmup period |
+| `warmup.incrementPerDay` | `50` | How much to raise the daily limit each day |
+| `rateLimits` | see above | Per-provider token-bucket caps. Key = provider domain or `"default"` |
+| `dkim` | `{}` | DKIM signing config keyed by sender domain (see DKIM Setup below) |
+
+---
+
+## DKIM Setup (Recommended)
+
+DKIM signs your outgoing mail cryptographically. Gmail and Yahoo require it for bulk senders.
+
+```bash
+npm run generate-dkim
+# Follow the prompts — enter your sending domain and selector (default: mail)
+```
+
+This creates:
+- `dkim/yourdomain.com/private.pem` — keep this secret, never commit it
+- `dkim/yourdomain.com/dns.txt` — the DNS TXT record to publish
+
+**Publish the DNS record**, then add to `config.json` (or paste via the DKIM section in Settings):
+
+```json
+{
+  "dkim": {
+    "yourdomain.com": {
+      "domainName": "yourdomain.com",
+      "keySelector": "mail",
+      "privateKeyPath": "./dkim/yourdomain.com/private.pem"
+    }
+  }
+}
+```
+
+Verify propagation:
+```bash
+dig TXT mail._domainkey.yourdomain.com
+```
+
+---
+
+## Template Variables
+
+Use `{{variable}}` in subject lines and HTML body files:
+
+| Variable | Value |
+|----------|-------|
+| `{{email}}` | Full recipient address: `john@example.com` |
+| `{{domain}}` | Recipient domain: `example.com` |
+| `{{name}}` | Sender display name from `names.txt` |
+| `{{unsubscribe_url}}` | One-click unsubscribe URL (requires `unsubscribeBaseUrl` in config) |
+
+---
+
+## Workspace File Reference
+
+All files are resolved relative to the working directory. Manage them all from the **Workspace Files** tab in the GUI.
+
+### `mxemails.txt` — Sender Candidates
+One email per line. The scanner checks each domain for MX, SPF, DMARC, and port 25.
+
+### `recipients.txt` — Destination Leads
+Any format — the tool auto-extracts valid email addresses.
+
+### `subjects.txt` — Email Subjects
+One per line. Rotates round-robin across recipients.
+
+### `names.txt` — Display Names
+One per line. Rotates alongside subjects.
+
+### `body.html` — Email Body
+Standard HTML with optional template variables. Multiple body files rotate per recipient (select them in the Campaign Wizard).
+
+### `smtp.txt` — Sender Config (auto-generated by scanner)
+```
+[SMTP.1]
+enabled      = true
+host         = mail.sender1.com
+port         = 25
+fromEmail    = alice@sender1.com
+allowPooling = true
+```
+
+### `suppression.txt` — Unsubscribe List (optional)
+One email per line. Silently skipped before any campaign starts.
 
 ---
 
@@ -396,91 +393,34 @@ Adjust proxy, delays, HELO hostname, TLS settings, and rate limits. All saved to
 npm run cli
 ```
 
-### Mode 1 — Scanner Only
-Reads `mxemails.txt`, checks MX + port 25 + SPF + DMARC, saves `smtp.txt`.
-
-### Mode 2 — Send Only
-Interactive file picker: loads `smtp.txt`, picks recipient/subject/name/body files, optionally resumes from `results.csv`.
-
-### Mode 3 — Scan + Send
-Runs the scanner, then immediately sends.
-
----
-
-## Deliverability Checklist
-
-For best inbox placement when sending from your own domain:
-
-1. **PTR record** — Set reverse DNS for your VPS IP to match `heloHost` in config  
-   _Contact your hosting provider's support_
-
-2. **SPF record** — Tell receiving servers your IP is authorized  
-   ```
-   TXT @ v=spf1 ip4:<your-vps-ip> ~all
-   ```
-
-3. **DKIM** — Cryptographic signature on every email  
-   ```bash
-   npm run generate-dkim
-   # Publish the DNS TXT record shown, add key path to config.json
-   ```
-
-4. **DMARC** — Policy for what happens when SPF/DKIM fails  
-   ```
-   TXT _dmarc v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com
-   ```
-   Start with `p=none` (monitor only) and move to `quarantine` once DKIM is confirmed working.
-
-5. **Unsubscribe** — Required by Gmail + Yahoo for bulk senders  
-   Set `unsubscribeBaseUrl` in config and include `{{unsubscribe_url}}` in your email body.
-
-> `allowWeakDomains: true` (the default) means the tool will send regardless of DNS auth status — it shows warnings but never blocks. Fix the DNS records for better inbox rates.
-
----
-
-## Results & Resume
-
-Every delivery attempt is logged to `results.csv` (and to `campaign.db` via SQLite):
-
-```csv
-email,from_email,subject,smtp,status,error,tls
-user@gmail.com,alice@sender.com,"Hello",[SMTP.1],sent,,true
-user@yahoo.com,bob@sender.net,"Hello",[SMTP.2],failed,"550 User unknown",
-user@aol.com,,,,skipped,port 25 blocked,
-```
-
-**Resume:** If `results.csv` / `campaign.db` exists when you start, already-sent addresses are automatically skipped. Safe to restart interrupted campaigns.
-
-**Export CSV from GUI:** `GET /api/export-csv?campaign=default`
-
----
-
-## SOCKS5 Proxy
-
-If outbound port 25 is blocked on your machine, route through a SOCKS5 proxy:
-
-```
-socks5://username:password@host:port
-socks4://host:port
-```
-
-Set it in three ways:
-1. Enter at the proxy prompt in CLI mode
-2. Set in the Settings tab of the Web GUI
-3. Set `PROXY_URL` environment variable
-
-The proxy is used for all connections — MX probes, port 25 checks, and SMTP delivery.
+| Mode | Description |
+|------|-------------|
+| `1` Scanner only | Reads `mxemails.txt`, checks MX + port 25 + SPF + DMARC, saves `smtp.txt` |
+| `2` Send only | Loads `smtp.txt`, picks files interactively, sends |
+| `3` Scan + Send | Runs scanner then sends in one run |
+| `4` Start Web GUI | Launches the web dashboard |
 
 ---
 
 ## VPS Deployment
 
-### PM2
+### PM2 (via install script — recommended)
+
+The install scripts prompt you during setup. To set it up manually:
 
 ```bash
 npm install -g pm2
 pm2 start ecosystem.config.js
 pm2 save && pm2 startup
+# Follow the printed command to enable auto-start on reboot
+```
+
+Useful commands:
+```bash
+pm2 status                  # show all processes
+pm2 logs vps-sender         # live log stream
+pm2 restart vps-sender      # restart (e.g. after config change)
+pm2 stop vps-sender         # stop
 ```
 
 ### Docker
@@ -496,7 +436,21 @@ docker run -d \
   vps-sender
 ```
 
-See [docs/DEPLOY.md](docs/DEPLOY.md) for systemd unit example and full deployment notes.
+---
+
+## SOCKS5 Proxy
+
+If outbound port 25 is blocked, route through a SOCKS5 proxy:
+
+```
+socks5://username:password@host:port
+socks4://host:port
+```
+
+Set it in three ways:
+1. Settings tab → **SOCKS5 Proxy URL** field
+2. CLI mode proxy prompt
+3. `PROXY_URL` environment variable
 
 ---
 
@@ -516,7 +470,7 @@ Structured JSON logs: `logs/vps-sender.log` (rotates at 10 MB).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3000` | Web GUI port |
+| `PORT` | `3000` | Web GUI port (overrides config) |
 | `PROXY_URL` | — | SOCKS5 proxy (overrides config) |
 | `SENDING_IP` | `auto` | Override auto-detected public IP |
 
@@ -526,51 +480,58 @@ PORT=8080 PROXY_URL=socks5://user:pass@1.2.3.4:1080 npm start
 
 ---
 
-## How Direct-to-MX Works
+## Deliverability Checklist
 
-```
-Your server
-   │
-   ├─ DNS MX lookup: example.com → mail.example.com
-   │
-   ├─ TCP connect → mail.example.com:25
-   │
-   ├─ SMTP handshake
-   │     EHLO mail.yourdomain.com        ← your heloHost
-   │     STARTTLS (TLS upgrade if offered)
-   │     MAIL FROM:<alice@yourdomain.com>
-   │     RCPT TO:<recipient@example.com>
-   │     DATA → [MIME message with DKIM signature]
-   │     QUIT
-   │
-   └─ Result → results.csv + campaign.db
+1. **PTR record** — Set reverse DNS for your VPS IP to match `heloHost` in config
+2. **SPF record**
+   ```
+   TXT @ v=spf1 ip4:<your-vps-ip> ~all
+   ```
+3. **DKIM** — `npm run generate-dkim`, publish the DNS record, add path to config
+4. **DMARC**
+   ```
+   TXT _dmarc v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com
+   ```
+5. **Unsubscribe** — Set `unsubscribeBaseUrl` and include `{{unsubscribe_url}}` in body
+
+---
+
+## Results & Resume
+
+Every delivery attempt is logged to `results.csv`:
+
+```csv
+email,from_email,subject,smtp,status,error,tls
+user@gmail.com,alice@sender.com,"Hello",[SMTP.1],sent,,true
+user@yahoo.com,bob@sender.net,"Hello",[SMTP.2],failed,"550 User unknown",
 ```
 
-**Rotation:** After every N emails the tool switches to the next sender in `smtp.txt`.  
-**Greylisting:** On a `4xx` response the tool waits `greylistWait` ms and retries up to 3 times.  
-**Rate limiting:** Per-provider token-bucket limits (configurable) prevent throttling.
+**Resume:** On restart, already-sent addresses are automatically skipped. Safe to restart interrupted campaigns.
 
 ---
 
 ## Troubleshooting
 
 **`npm install` fails on `better-sqlite3`**  
-Native bindings need build tools. On Linux: `apt install python3 make g++`. On Windows: install [windows-build-tools](https://github.com/nodejs/node-gyp#on-windows).
+Native bindings need build tools. Run the install script — it handles this automatically.
 
 **"Nothing reachable to send"**  
-Port 25 is blocked. Test: `telnet gmail-smtp-in.l.google.com 25`. Use a VPS or SOCKS5 proxy with port 25 open.
+Port 25 is blocked. Test: `telnet gmail-smtp-in.l.google.com 25`. Use a VPS or SOCKS5 proxy.
 
 **Emails go to spam**  
-Set up SPF, DKIM, and DMARC as described in the [Deliverability Checklist](#deliverability-checklist). Check your sending IP's reputation at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists.aspx).
+Set up SPF, DKIM, and DMARC (see Deliverability Checklist above). Check your IP at mxtoolbox.com/blacklists.
 
 **Web GUI shows "SSE Offline"**  
-The server stopped. Restart: `npm start`.
+The server stopped. Restart: `npm start` or `pm2 restart vps-sender`.
 
 **Port 3000 already in use**  
-`PORT=3001 npm start`
+`PORT=3001 npm start` or change `port` in `config.json`.
 
-**Results CSV blank during campaign**  
-Don't open it in Excel while sending — Excel locks the file on Windows. Use a text editor.
+**GUI asks for a token I don't know**  
+Edit `config.json` and clear `apiToken`, then restart.
 
 **DKIM not signing**  
 Check that `privateKeyPath` in `config.json` points to an existing `.pem` file and the domain matches the `fromEmail` domain exactly.
+
+**Rate limits JSON invalid**  
+If you edited Rate Limits in Settings and saved, check the JSON syntax — invalid JSON is silently skipped and the previous value is kept.

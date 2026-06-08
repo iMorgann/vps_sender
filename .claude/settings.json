@@ -10,7 +10,13 @@
       "Bash(node --test test/)",
       "Bash(node --test test/hygiene.test.js test/mime.test.js test/retry.test.js)",
       "Bash(node --experimental-vm-modules node_modules/.bin/jest --no-coverage)",
-      "Bash(npx jest *)"
+      "Bash(npx jest *)",
+      "Bash(node --check vps-sender.js)",
+      "Bash(node --check web/app.js)",
+      "Bash(node --check lib/campaign/engine.js)",
+      "Bash(node --check lib/mime/dkim.js)",
+      "Bash(node --check lib/delivery/smtp-client.js)",
+      "Bash(node --check lib/net/proxy.js)"
     ]
   }
 }

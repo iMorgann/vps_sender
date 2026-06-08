@@ -313,35 +313,176 @@ else
     echo ""
 fi
 
-# ── 8. Firewall note (Linux only) ────────────────────────────────────────────
+# ── 8. Firewall — all platforms ──────────────────────────────────────────────
+step "8. Firewall check for port 3000..."
+
 if [[ "$OS" == "linux" ]]; then
+    # ── UFW (Ubuntu/Debian) ──────────────────────────────────────────────────
     if command -v ufw &>/dev/null; then
         UFW_STATUS=$(ufw status 2>/dev/null | head -1 || true)
         if echo "$UFW_STATUS" | grep -q "active"; then
-            info "UFW firewall is active."
-            info "The Web GUI runs on port 3000 (localhost only by default)."
-            info "To expose it on the network: sudo ufw allow 3000"
+            info "UFW is active — opening port 3000..."
+            run ufw allow 3000/tcp comment "vps-sender web GUI" 2>/dev/null && \
+                ok "UFW: port 3000 allowed" || \
+                warn "Could not open port 3000 in UFW. Run: sudo ufw allow 3000"
+        else
+            info "UFW is inactive — no firewall rule needed"
         fi
     fi
+
+    # ── firewalld (Fedora / RHEL / CentOS) ──────────────────────────────────
+    if command -v firewall-cmd &>/dev/null; then
+        if firewall-cmd --state 2>/dev/null | grep -q "running"; then
+            info "firewalld is active — opening port 3000..."
+            run firewall-cmd --permanent --add-port=3000/tcp 2>/dev/null && \
+            run firewall-cmd --reload 2>/dev/null && \
+                ok "firewalld: port 3000 allowed" || \
+                warn "Could not open port. Run: sudo firewall-cmd --permanent --add-port=3000/tcp && sudo firewall-cmd --reload"
+        else
+            info "firewalld is inactive — no firewall rule needed"
+        fi
+    fi
+
+    # ── iptables fallback ────────────────────────────────────────────────────
+    if ! command -v ufw &>/dev/null && ! command -v firewall-cmd &>/dev/null; then
+        if command -v iptables &>/dev/null; then
+            warn "No ufw/firewalld found. If port 3000 is blocked, run:"
+            warn "  iptables -A INPUT -p tcp --dport 3000 -j ACCEPT"
+        fi
+    fi
+
+elif [[ "$OS" == "mac" ]]; then
+    info "macOS: Application Firewall usually allows inbound connections."
+    info "If port 3000 is blocked, go to System Settings → Firewall → Allow node."
+fi
+ok "Firewall step complete"
+
+# ── 9. Web GUI access ─────────────────────────────────────────────────────────
+step "9. Web GUI access..."
+
+BIND_PUBLIC="n"
+API_TOKEN=""
+
+if [[ -t 0 ]]; then
+    echo ""
+    echo -e "  The web GUI defaults to ${BOLD}localhost (127.0.0.1)${RESET} — safe for local use."
+    echo -e "  To reach it from a browser on another machine, bind to 0.0.0.0."
+    echo ""
+    read -rp "  Bind GUI to public network (0.0.0.0)? [y/N]: " BIND_PUBLIC
 fi
 
-# ── 9. Done ───────────────────────────────────────────────────────────────────
+if [[ "$BIND_PUBLIC" =~ ^[Yy]$ ]]; then
+    echo ""
+    warn "Public binding enabled. An API token is STRONGLY recommended."
+    if [[ -t 0 ]]; then
+        read -rp "  Set API token (leave blank to skip — NOT recommended): " API_TOKEN
+    fi
+
+    node -e "
+      const fs = require('fs'), p = './config.json';
+      const c  = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
+      c.bindHost = '0.0.0.0';
+      const tok = process.argv[2];
+      if (tok) c.apiToken = tok;
+      fs.writeFileSync(p, JSON.stringify(c, null, 2), { mode: 0o600 });
+    " -- "$API_TOKEN"
+    chmod 600 config.json 2>/dev/null || true
+
+    ok "bindHost set to 0.0.0.0"
+    [[ -z "$API_TOKEN" ]] && warn "No API token set — the GUI is open to the internet without auth!"
+else
+    ok "GUI will bind to localhost (127.0.0.1)"
+    info "Remote access via SSH tunnel: ssh -L 3000:localhost:3000 user@<server>"
+fi
+
+# ── 10. PM2 process manager (optional) ───────────────────────────────────────
+step "10. Process manager (PM2)..."
+
+SETUP_PM2="n"
+PM2_ACTIVE=false
+
+if [[ -t 0 ]]; then
+    echo ""
+    echo -e "  PM2 keeps the server alive after logout and restarts it on crash."
+    read -rp "  Install PM2 and start now? [y/N]: " SETUP_PM2
+fi
+
+if [[ "$SETUP_PM2" =~ ^[Yy]$ ]]; then
+    info "Installing PM2 globally..."
+    npm install -g pm2 2>&1 | tail -3
+
+    info "Starting vps-sender via PM2..."
+    pm2 start ecosystem.config.js
+
+    info "Saving PM2 process list..."
+    pm2 save
+
+    info "Configuring PM2 to start on system boot..."
+    if [[ "$OS" == "linux" ]]; then
+        STARTUP_CMD=$(pm2 startup 2>&1 | grep -E "sudo env PATH|sudo.*pm2" | tail -1 || true)
+        if [[ -n "$STARTUP_CMD" ]]; then
+            info "Running: $STARTUP_CMD"
+            eval "$STARTUP_CMD" 2>/dev/null || \
+                warn "Could not set startup hook automatically. Run manually: $STARTUP_CMD"
+        fi
+    elif [[ "$OS" == "mac" ]]; then
+        pm2 startup launchd 2>/dev/null || \
+            warn "Run 'pm2 startup launchd' manually and follow the instructions."
+    fi
+
+    ok "PM2 running — commands: pm2 status | pm2 logs vps-sender | pm2 restart vps-sender"
+    PM2_ACTIVE=true
+else
+    ok "Skipped PM2 — start manually with: npm start"
+fi
+
+# ── 11. Done ──────────────────────────────────────────────────────────────────
+
+# Detect public IP (best-effort, silent on failure)
+PUBLIC_IP=$(curl -fsSL --max-time 4 https://api.ipify.org 2>/dev/null \
+            || curl -fsSL --max-time 4 https://ifconfig.me  2>/dev/null \
+            || hostname -I 2>/dev/null | awk '{print $1}' \
+            || echo "<your-server-ip>")
+
+# Read bindHost and port back from config.json
+BIND_HOST=$(node -e "try{const c=require('./config.json');process.stdout.write(c.bindHost||'127.0.0.1')}catch(e){process.stdout.write('127.0.0.1')}" 2>/dev/null || echo "127.0.0.1")
+PORT_VAL=$(node  -e "try{const c=require('./config.json');process.stdout.write(String(c.port||3000))}catch(e){process.stdout.write('3000')}"       2>/dev/null || echo "3000")
+
+if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+    GUI_URL="http://${PUBLIC_IP}:${PORT_VAL}"
+    SSH_HINT=""
+else
+    GUI_URL="http://localhost:${PORT_VAL}"
+    SSH_HINT="  (remote: ssh -L ${PORT_VAL}:localhost:${PORT_VAL} user@<server>  then open localhost:${PORT_VAL})"
+fi
+
 echo ""
 echo -e "${BOLD} ============================================================"
 echo   "  Setup complete!"
 echo   " ============================================================${RESET}"
 echo ""
+echo -e "  ${BOLD}Web GUI:${RESET}  ${GREEN}${GUI_URL}${RESET}"
+[[ -n "$SSH_HINT" ]] && echo -e "  ${CYAN}${SSH_HINT}${RESET}"
+echo ""
 echo -e "  ${BOLD}NEXT STEPS:${RESET}"
 echo ""
-echo -e "  1. Edit ${CYAN}mxemails.txt${RESET}   — add your sender email addresses"
-echo -e "  2. Edit ${CYAN}recipients.txt${RESET} — add destination email addresses"
-echo -e "  3. Edit ${CYAN}body.html${RESET}      — customise your email content"
-echo -e "  4. Run:  ${GREEN}npm start${RESET}      — opens Web GUI at http://localhost:3000"
+echo -e "  1. Edit ${CYAN}mxemails.txt${RESET}   — sender email addresses (or use the web GUI)"
+echo -e "  2. Edit ${CYAN}recipients.txt${RESET} — destination addresses"
+echo -e "  3. Edit ${CYAN}body.html${RESET}      — email body HTML"
+
+if [[ "$PM2_ACTIVE" == "true" ]]; then
+    echo -e "  4. Server is already running via PM2"
+    echo -e "     ${GREEN}pm2 logs vps-sender${RESET}     — live logs"
+    echo -e "     ${GREEN}pm2 restart vps-sender${RESET}  — restart after config change"
+else
+    echo -e "  4. Run: ${GREEN}npm start${RESET}           — starts the web GUI"
+    echo -e "     Or:  ${GREEN}npm run cli${RESET}         — interactive CLI mode"
+fi
+
 echo ""
 echo -e "  ${BOLD}Other commands:${RESET}"
-echo -e "    ${GREEN}npm run cli${RESET}              — interactive command-line mode"
-echo -e "    ${GREEN}npm run generate-dkim${RESET}    — create DKIM keys for your domain"
-echo -e "    ${GREEN}npm test${RESET}                 — run tests"
+echo -e "    ${GREEN}npm run generate-dkim${RESET}  — create DKIM keys for your domain"
+echo -e "    ${GREEN}npm test${RESET}               — run tests"
 echo ""
 
 if [[ "$PORT25_OPEN" == "false" ]]; then
