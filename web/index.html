@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPS Sender — Direct-to-MX Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="logo-area">
+        <div class="logo-icon">🚀</div>
+        <div class="logo-text">
+          <h2>VPS Sender</h2>
+          <span>Direct-to-MX Engine</span>
+        </div>
+      </div>
+      <nav class="nav-menu">
+        <a href="#" class="nav-item active" data-tab="dashboard">
+          <span class="icon">📊</span> Dashboard
+        </a>
+        <a href="#" class="nav-item" data-tab="campaign-wizard">
+          <span class="icon">✨</span> Campaign Wizard
+        </a>
+        <a href="#" class="nav-item" data-tab="file-manager">
+          <span class="icon">📁</span> Workspace Files
+        </a>
+        <a href="#" class="nav-item" data-tab="smtp-scanner">
+          <span class="icon">🔍</span> Domain Scanner
+        </a>
+        <a href="#" class="nav-item" data-tab="previewer">
+          <span class="icon">👁️</span> Mail Previewer
+        </a>
+        <a href="#" class="nav-item" data-tab="settings">
+          <span class="icon">⚙️</span> Settings & Proxy
+        </a>
+      </nav>
+      <div class="engine-status-badge idle" id="engine-status">
+        <span class="pulse"></span> <span id="engine-status-text">Engine: Idle</span>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top header bar -->
+      <header class="top-header">
+        <h1 id="current-tab-title">Dashboard</h1>
+        <div class="connection-status">
+          <span class="status-indicator connected"></span> SSE Connected
+        </div>
+      </header>
+
+      <!-- Tab Content: Dashboard -->
+      <section class="tab-content active" id="tab-dashboard">
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+          <div class="stat-card blue">
+            <div class="stat-header">
+              <span class="stat-label">Total Recipients</span>
+              <span class="stat-icon">👥</span>
+            </div>
+            <div class="stat-value" id="stats-total">0</div>
+            <div class="stat-footer" id="stats-total-desc">Reachable: 0 | Dropped: 0</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-header">
+              <span class="stat-label">Emails Sent</span>
+              <span class="stat-icon">✅</span>
+            </div>
+            <div class="stat-value" id="stats-sent">0</div>
+            <div class="stat-footer" id="stats-sent-pct">0% Success rate</div>
+          </div>
+          <div class="stat-card red">
+            <div class="stat-header">
+              <span class="stat-label">Delivery Failed</span>
+              <span class="stat-icon">❌</span>
+            </div>
+            <div class="stat-value" id="stats-failed">0</div>
+            <div class="stat-footer" id="stats-failed-pct">0% Failed</div>
+          </div>
+          <div class="stat-card amber">
+            <div class="stat-header">
+              <span class="stat-label">Greylisted</span>
+              <span class="stat-icon">⏳</span>
+            </div>
+            <div class="stat-value" id="stats-greylisted">0</div>
+            <div class="stat-footer">Retrying in background</div>
+          </div>
+        </div>
+
+        <!-- Progress and Control Panel -->
+        <div class="panel progress-panel">
+          <div class="progress-header">
+            <h3>Campaign Progress</h3>
+            <div class="campaign-actions">
+              <button id="btn-start" class="btn btn-primary btn-glow">Start Campaign</button>
+              <button id="btn-pause" class="btn btn-secondary" disabled>Pause</button>
+              <button id="btn-stop" class="btn btn-danger" disabled>Stop</button>
+            </div>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+          </div>
+          <div class="progress-meta">
+            <div class="meta-item">
+              <span class="meta-label">Speed:</span>
+              <span class="meta-value" id="meta-speed">0.0 emails/s</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">Elapsed Time:</span>
+              <span class="meta-value" id="meta-elapsed">0s</span>
+            </div>
+            <div class="meta-item">
+              <span class="meta-label">ETA:</span>
+              <span class="meta-value" id="meta-eta">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Visual Analytics & Live Logs -->
+        <div class="dashboard-split">
+          <!-- Left side: Log Terminal -->
+          <div class="panel terminal-panel">
+            <div class="panel-header">
+              <h3>Live Console Logs</h3>
+              <button class="btn btn-sm" id="btn-clear-logs">Clear Logs</button>
+            </div>
+            <div class="terminal" id="log-terminal">
+              <div class="terminal-line system">=== System initialized. Choose files and click Start. ===</div>
+            </div>
+          </div>
+
+          <!-- Right side: Success vs Fail Chart and Current Sending Card -->
+          <div class="side-panel-group">
+            <div class="panel sending-details-panel">
+              <h3>Current Output</h3>
+              <div class="sending-details">
+                <div class="detail-row">
+                  <span class="detail-label">Recipient:</span>
+                  <span class="detail-value text-glow" id="current-recipient">--</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Active SMTP:</span>
+                  <span class="detail-value" id="current-smtp">--</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Sender Email:</span>
+                  <span class="detail-value" id="current-sender">--</span>
+                </div>
+                <div class="detail-row">
+                  <span class="detail-label">Subject:</span>
+                  <span class="detail-value" id="current-subject">--</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel chart-panel">
+              <h3>Delivery Statistics Breakdown</h3>
+              <div class="chart-container">
+                <canvas id="stats-chart" width="220" height="150"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Content: Campaign Wizard -->
+      <section class="tab-content" id="tab-campaign-wizard">
+        <div class="panel">
+          <h2>Create New Campaign</h2>
+          <p class="section-desc">Configure parameters for direct-to-MX rotating delivery.</p>
+          
+          <form id="campaign-form" class="form-container">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="wizard-recipient-file">Recipient Leads File</label>
+                <select id="wizard-recipient-file" class="form-control" required></select>
+                <small class="form-hint">List of destination emails (.txt / .csv)</small>
+              </div>
+              <div class="form-group">
+                <label for="wizard-names-file">Display Names File</label>
+                <select id="wizard-names-file" class="form-control"></select>
+                <small class="form-hint">Displays names for SMTP rotation (.txt)</small>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="wizard-subjects-file">Subjects File</label>
+                <select id="wizard-subjects-file" class="form-control" required></select>
+                <small class="form-hint">Email subjects rotating round-robin (.txt)</small>
+              </div>
+              <div class="form-group">
+                <label for="wizard-bodies-file">HTML Bodies</label>
+                <div class="checkbox-list" id="wizard-bodies-container">
+                  <!-- JS populated html body files -->
+                </div>
+                <small class="form-hint">Choose one or more HTML body templates (Space toggle)</small>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="wizard-smtp-file">SMTP Server List</label>
+                <select id="wizard-smtp-file" class="form-control" required></select>
+                <small class="form-hint">The smtp config file generated by scanner</small>
+              </div>
+              <div class="form-group">
+                <label for="wizard-attachments">Attachments</label>
+                <div class="checkbox-list" id="wizard-attachments-container">
+                  <!-- JS populated attachments -->
+                </div>
+                <small class="form-hint">Choose attachments to send</small>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="wizard-rot-every">Rotate SMTP account every</label>
+                <input type="number" id="wizard-rot-every" class="form-control" value="2" min="1">
+                <small class="form-hint">Number of sends before shifting to the next SMTP credential</small>
+              </div>
+              <div class="form-group">
+                <label>Resume Option</label>
+                <div class="checkbox-wrapper">
+                  <input type="checkbox" id="wizard-resume" checked>
+                  <label for="wizard-resume" class="checkbox-label">Skip already-sent recipients (reads results.csv)</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary btn-glow">Apply to Campaign Dashboard</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Tab Content: File Manager -->
+      <section class="tab-content" id="tab-file-manager">
+        <div class="file-manager-grid">
+          <!-- Files list -->
+          <div class="panel files-sidebar">
+            <h3>Workspace Files</h3>
+            <ul class="file-list" id="file-list-ul">
+              <!-- JS populated file list -->
+            </ul>
+          </div>
+          
+          <!-- File Editor -->
+          <div class="panel file-editor-panel">
+            <div class="editor-header">
+              <h3 id="editing-file-name">Select a file to edit</h3>
+              <button class="btn btn-primary btn-sm" id="btn-save-file" disabled>Save Changes</button>
+            </div>
+            <textarea id="file-editor" class="code-editor" placeholder="File contents will load here..." disabled></textarea>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Content: SMTP Scanner -->
+      <section class="tab-content" id="tab-smtp-scanner">
+        <div class="scanner-layout">
+          <div class="panel scanner-input-panel">
+            <h2>Domain Auth Pre-Scanner</h2>
+            <p class="section-desc">Reads candidates from a list, verifies MX records, checks SPF and DMARC strength, tests outbound Port 25 connectivity, and exports to `smtp.txt`.</p>
+            
+            <div class="form-group">
+              <label for="scan-source-file">Sender Source List</label>
+              <select id="scan-source-file" class="form-control"></select>
+              <small class="form-hint">Select a file containing sender email addresses (e.g. mxemails.txt)</small>
+            </div>
+
+            <div class="form-group">
+              <label>Scan Options</label>
+              <div class="checkbox-wrapper">
+                <input type="checkbox" id="scan-include-weak" checked>
+                <label for="scan-include-weak" class="checkbox-label">Include WEAK domains (soft SPF / no DMARC enforce)</label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="scan-output-file">Output Config File</label>
+              <input type="text" id="scan-output-file" class="form-control" value="smtp.txt">
+            </div>
+
+            <button id="btn-trigger-scan" class="btn btn-primary btn-glow">Start Auth & Port 25 Scan</button>
+          </div>
+
+          <!-- Scan Progress & Results -->
+          <div class="panel scanner-results-panel">
+            <div class="panel-header">
+              <h3>Scan Results</h3>
+              <span id="scan-counter-status" class="badge">Idle</span>
+            </div>
+            <div class="table-container">
+              <table class="scan-results-table">
+                <thead>
+                  <tr>
+                    <th>Domain</th>
+                    <th>MX Server</th>
+                    <th>Port 25</th>
+                    <th>SPF</th>
+                    <th>DMARC</th>
+                    <th>Score</th>
+                  </tr>
+                </thead>
+                <tbody id="scan-results-tbody">
+                  <tr>
+                    <td colspan="6" class="text-center text-dim">No scan performed yet. Choose a file and click Scan.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Content: Mail Previewer -->
+      <section class="tab-content" id="tab-previewer">
+        <div class="previewer-grid">
+          <div class="panel preview-config">
+            <h3>Interpolation Preview</h3>
+            <p class="section-desc">Simulate email rendering with variables replaced.</p>
+            
+            <div class="form-group">
+              <label for="preview-email">Test Destination Email</label>
+              <input type="text" id="preview-email" class="form-control" value="recipient@example.com">
+            </div>
+
+            <div class="form-group">
+              <label for="preview-name">Sender Display Name</label>
+              <input type="text" id="preview-name" class="form-control" value="John Doe">
+            </div>
+
+            <div class="form-group">
+              <label for="preview-sender">Sender Email Address</label>
+              <input type="text" id="preview-sender" class="form-control" value="sender@domain.com">
+            </div>
+
+            <div class="form-group">
+              <label for="preview-subject-template">Subject Template</label>
+              <input type="text" id="preview-subject-template" class="form-control" value="Quick question about {{domain}}">
+            </div>
+
+            <button id="btn-refresh-preview" class="btn btn-primary">Render Template</button>
+          </div>
+
+          <div class="panel preview-render-panel">
+            <div class="rendered-header">
+              <div class="rendered-meta">
+                <div><strong>From:</strong> <span id="render-from-meta"></span></div>
+                <div><strong>To:</strong> <span id="render-to-meta"></span></div>
+                <div><strong>Subject:</strong> <span id="render-subject-meta" class="text-glow"></span></div>
+              </div>
+            </div>
+            <div class="rendered-body-container">
+              <iframe id="rendered-body-iframe" src="about:blank" sandbox="allow-same-origin"></iframe>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab Content: Settings & Proxy -->
+      <section class="tab-content" id="tab-settings">
+        <div class="panel max-w-600">
+          <h2>System Configuration</h2>
+          <p class="section-desc">Modify system paths, delay parameters, and SOCKS5 proxy settings.</p>
+
+          <form id="settings-form" class="form-container">
+            <div class="form-group">
+              <label for="settings-proxy">SOCKS5 Proxy URL</label>
+              <div class="proxy-input-group">
+                <input type="text" id="settings-proxy" class="form-control" placeholder="socks5://user:pass@host:port (or leave blank)">
+                <button type="button" id="btn-test-proxy" class="btn btn-secondary">Test Connection</button>
+              </div>
+              <small class="form-hint" id="proxy-test-status">No proxy configured or tested yet.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-delay">Send Delay (milliseconds)</label>
+              <input type="number" id="settings-delay" class="form-control" value="1200" min="0">
+              <small class="form-hint">Delay between consecutive email sends</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-greylist">Greylist Retry Timeout (milliseconds)</label>
+              <input type="number" id="settings-greylist" class="form-control" value="60000" min="5000">
+              <small class="form-hint">Time to wait before retrying a greylisted (4xx) email</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-results-file">Campaign Results File</label>
+              <input type="text" id="settings-results-file" class="form-control" value="results.csv">
+              <small class="form-hint">Destination CSV file to log sending status</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-helo-host">EHLO/HELO Hostname</label>
+              <input type="text" id="settings-helo-host" class="form-control" placeholder="mail.yourdomain.com">
+              <small class="form-hint">Hostname presented in SMTP EHLO command</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-concurrency">Concurrency (1–5)</label>
+              <input type="number" id="settings-concurrency" class="form-control" value="2" min="1" max="5">
+              <small class="form-hint">Number of simultaneous outbound SMTP connections</small>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-unsubscribe">Unsubscribe Base URL</label>
+              <input type="text" id="settings-unsubscribe" class="form-control" placeholder="https://yourdomain.com/unsub">
+              <small class="form-hint">Base URL for List-Unsubscribe header (leave blank to omit)</small>
+            </div>
+
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="settings-tls-reject"> Reject invalid TLS certificates
+              </label>
+              <small class="form-hint">Uncheck to allow self-signed certs on receiving MTAs</small>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-glow">Save Configuration</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

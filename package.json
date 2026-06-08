@@ -1,0 +1,26 @@
+{
+  "name": "vps-sender",
+  "version": "2.0.0",
+  "description": "Direct-to-MX rotating email sender with DKIM, smart retries, and web GUI",
+  "main": "vps-sender.js",
+  "bin": {
+    "vps-sender": "./vps-sender.js"
+  },
+  "scripts": {
+    "start": "node vps-sender.js --gui",
+    "cli": "node vps-sender.js",
+    "gui": "node vps-sender.js --gui",
+    "generate-dkim": "node scripts/generate-dkim.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "html-to-text": "^9.0.5",
+    "nodemailer": "^6.9.13",
+    "open": "^9.1.0",
+    "socks": "^2.8.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

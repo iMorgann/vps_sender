@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node -e ' *)",
+      "Bash(node --test test/hygiene.test.js test/retry.test.js test/mime.test.js)",
+      "Bash(node -e \"require\\('./vps-sender.js'\\)\" -- --help)",
+      "Bash(bash -n install.sh)",
+      "Bash(bash -n \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\install.sh\")",
+      "Bash(node --test test/)",
+      "Bash(node --test test/hygiene.test.js test/mime.test.js test/retry.test.js)",
+      "Bash(node --experimental-vm-modules node_modules/.bin/jest --no-coverage)",
+      "Bash(npx jest *)"
+    ]
+  }
+}

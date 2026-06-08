@@ -1,0 +1,10 @@
+node_modules/
+logs/
+dkim/
+campaign.db
+config.json
+results.csv
+suppression.txt
+*.bak
+*.pem
+.env
