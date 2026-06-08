@@ -88,16 +88,16 @@ if [[ "$NODE_OK" == "false" ]]; then
             run apt-get update -qq
 
             info "Adding NodeSource repository..."
-            curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - 2>&1 | grep -v "^$" | sed 's/^/  /'
+            curl -fsSL https://deb.nodesource.com/setup_20.x | ${SUDO:+$SUDO -E} bash - 2>&1 | grep -v "^$" | sed 's/^/  /' || true
             run apt-get install -y nodejs
 
         elif [[ "$PKG" == "dnf" ]]; then
             run dnf module enable -y nodejs:20 2>/dev/null || true
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO bash -
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | ${SUDO:+$SUDO} bash -
             run dnf install -y nodejs
 
         elif [[ "$PKG" == "yum" ]]; then
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO bash -
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | ${SUDO:+$SUDO} bash -
             run yum install -y nodejs
 
         else
@@ -110,8 +110,13 @@ if [[ "$NODE_OK" == "false" ]]; then
     elif [[ "$OS" == "mac" ]]; then
         if command -v brew &>/dev/null; then
             info "Installing Node.js via Homebrew..."
-            brew install node@20
-            brew link --overwrite node@20 2>/dev/null || true
+            brew install node@20 || brew upgrade node@20 || true
+            brew link --overwrite --force node@20 2>/dev/null || true
+            # Update PATH immediately so command -v node works in this shell session.
+            # node@20 is keg-only — brew does not link it into PATH automatically.
+            BREW_NODE_BIN="$(brew --prefix node@20 2>/dev/null)/bin"
+            [[ -d "$BREW_NODE_BIN" ]] && export PATH="$BREW_NODE_BIN:$PATH"
+            hash -r 2>/dev/null || true
         else
             err "Homebrew not found. Install it first:"
             err "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
