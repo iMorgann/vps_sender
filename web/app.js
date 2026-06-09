@@ -255,12 +255,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Toggle dynamic-from domain input based on from-mode radio
+  // Toggle from-mode inputs based on radio selection
+  function updateFromModeUI() {
+    const mode = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
+    document.getElementById("fixed-from-group").style.display         = mode === "fixed"   ? "block" : "none";
+    document.getElementById("dynamic-from-domain-group").style.display = mode === "dynamic" ? "block" : "none";
+  }
   document.querySelectorAll('input[name="from-mode"]').forEach(radio => {
-    radio.addEventListener("change", () => {
-      const isDynamic = document.getElementById("from-mode-dynamic").checked;
-      document.getElementById("dynamic-from-domain-group").style.display = isDynamic ? "block" : "none";
-    });
+    radio.addEventListener("change", updateFromModeUI);
   });
 
   wizardForm.addEventListener("submit", async (e) => {
@@ -268,10 +270,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const checkedBodies = Array.from(document.querySelectorAll('input[name="htmlBodies"]:checked')).map(el => el.value);
     const checkedAttachments = Array.from(document.querySelectorAll('input[name="attachments"]:checked')).map(el => el.value);
 
-    const isDynamicFrom = document.querySelector('input[name="from-mode"]:checked')?.value === "dynamic";
-    const isDomainRot   = document.getElementById("wizard-domain-rotation").checked;
-    if (isDynamicFrom && isDomainRot) {
-      appendLog("Warning: Dynamic From Domain overrides Domain Rotation — domain rotation will be ignored.", "warn");
+    const fromMode    = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
+    const isDomainRot = document.getElementById("wizard-domain-rotation").checked;
+    if (fromMode === "dynamic" && isDomainRot) {
+      appendLog("Warning: Unique per-recipient mode overrides Domain Rotation — domain rotation will be ignored.", "warn");
     }
 
     const payload = {
@@ -284,8 +286,11 @@ document.addEventListener("DOMContentLoaded", () => {
       rotEvery:          parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
       resume:            document.getElementById("wizard-resume").checked,
       domainRotation:    isDomainRot,
-      dynamicFromDomain: isDynamicFrom
+      dynamicFromDomain: fromMode === "dynamic"
         ? (document.getElementById("wizard-dynamic-from-domain").value.trim() || "")
+        : "",
+      fromEmailOverride: fromMode === "fixed"
+        ? (document.getElementById("wizard-fixed-from-email").value.trim() || "")
         : "",
     };
 

@@ -1132,6 +1132,7 @@ async function startWebServer() {
         if (body.resume            !== undefined) safe.resume            = !!body.resume;
         if (body.domainRotation    !== undefined) safe.domainRotation    = !!body.domainRotation;
         if (body.dynamicFromDomain !== undefined) safe.dynamicFromDomain = String(body.dynamicFromDomain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
+        if (body.fromEmailOverride !== undefined) safe.fromEmailOverride = String(body.fromEmailOverride || "").replace(/[\r\n]/g, "").trim();
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1520,6 +1521,7 @@ let webCampaignConfig = {
   resume:            true,
   domainRotation:    false,
   dynamicFromDomain: "",
+  fromEmailOverride: "",
 };
 
 async function runWebScanner(emails, includeWeak, outputFile) {
@@ -1631,7 +1633,7 @@ async function runWebCampaign() {
     attachments,
     allEmails,
     domainPool,
-    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", _proxy: PROXY },
+    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,
     onProgress: s => {

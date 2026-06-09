@@ -27,7 +27,8 @@
       "Bash(grep -n \"innerHTML.*\\\\[^'\\\\\"].*data\\\\|innerHTML.*\\\\$.*item\\\\|innerHTML.*\\\\$.*data\" web/app.js)",
       "Bash(node --check lib/mime/builder.js)",
       "Bash(node --check lib/scanner/blacklist.js)",
-      "Bash(node --check lib/delivery/relay-client.js)"
+      "Bash(node --check lib/delivery/relay-client.js)",
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\mime\\\\builder.js\")"
     ]
   }
 }
