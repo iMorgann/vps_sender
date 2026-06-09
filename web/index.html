@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VPS Sender — Direct-to-MX Dashboard</title>
+  <title>VPS Sender</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
   <div class="app-container">
     <!-- Sidebar Navigation -->
     <aside class="sidebar">
@@ -19,7 +20,7 @@
         <div class="logo-icon">🚀</div>
         <div class="logo-text">
           <h2>VPS Sender</h2>
-          <span>Direct-to-MX Engine</span>
+          <span>Mail Delivery Engine</span>
         </div>
       </div>
       <nav class="nav-menu">
@@ -38,6 +39,9 @@
         <a href="#" class="nav-item" data-tab="previewer">
           <span class="icon">👁️</span> Mail Previewer
         </a>
+        <a href="#" class="nav-item" data-tab="relay-manager">
+          <span class="icon">🔌</span> Relay Manager
+        </a>
         <a href="#" class="nav-item" data-tab="settings">
           <span class="icon">⚙️</span> Settings & Proxy
         </a>
@@ -51,6 +55,7 @@
     <main class="main-content">
       <!-- Top header bar -->
       <header class="top-header">
+        <button class="hamburger-btn" id="hamburger-btn" aria-label="Toggle navigation">&#9776;</button>
         <h1 id="current-tab-title">Dashboard</h1>
         <div class="connection-status">
           <span class="status-indicator connected"></span> SSE Connected
@@ -394,6 +399,96 @@
               <iframe id="rendered-body-iframe" src="about:blank" sandbox="allow-same-origin"></iframe>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- Tab Content: Relay Manager -->
+      <section class="tab-content" id="tab-relay-manager">
+        <div class="relay-manager-wrap">
+
+          <!-- Mode Banner -->
+          <div class="panel relay-mode-banner" id="relay-mode-banner">
+            <div class="relay-mode-info">
+              <span class="relay-mode-badge" id="relay-mode-badge">Direct to MX</span>
+              <div>
+                <h3 id="relay-mode-title">Direct-to-MX Mode Active</h3>
+                <p class="form-hint" id="relay-mode-desc">Emails resolve MX records and connect directly on port 25. No local MTA required.</p>
+              </div>
+            </div>
+            <a href="#" class="btn btn-secondary btn-sm relay-settings-link" data-tab="settings">Configure in Settings →</a>
+          </div>
+
+          <!-- Direct-mode placeholder (shown when not in relay mode) -->
+          <div class="panel relay-direct-note" id="relay-direct-note">
+            <div class="relay-direct-icon">📡</div>
+            <h3>No relay service needed in Direct-to-MX mode</h3>
+            <p class="form-hint">Switch to <strong>Local MTA Relay</strong> in Settings → Transport Mode to route mail through Postfix (Linux/Mac) or hMailServer (Windows). Once enabled, come back here to verify the relay is healthy.</p>
+          </div>
+
+          <!-- Health grid — only visible in relay mode -->
+          <div id="relay-health-grid" class="relay-health-grid" style="display:none">
+
+            <!-- Connection test card -->
+            <div class="panel relay-health-card" id="card-connection">
+              <div class="health-card-header">
+                <div class="health-card-title">
+                  <span class="health-card-icon">🔌</span>
+                  <div>
+                    <div class="health-card-name">Relay Connection</div>
+                    <div class="health-card-target" id="relay-conn-target">—</div>
+                  </div>
+                </div>
+                <span class="health-badge checking" id="relay-conn-badge">Checking…</span>
+              </div>
+              <div class="health-card-body" id="relay-conn-body"></div>
+            </div>
+
+            <!-- MTA status card -->
+            <div class="panel relay-health-card" id="card-mta">
+              <div class="health-card-header">
+                <div class="health-card-title">
+                  <span class="health-card-icon" id="mta-icon">⚙️</span>
+                  <div>
+                    <div class="health-card-name" id="mta-card-name">MTA Status</div>
+                    <div class="health-card-target" id="mta-card-target">—</div>
+                  </div>
+                </div>
+                <span class="health-badge checking" id="mta-status-badge">Checking…</span>
+              </div>
+              <div class="health-card-body" id="mta-body"></div>
+            </div>
+
+            <!-- Issues & warnings (full-width, hidden if none) -->
+            <div class="panel relay-health-card relay-health-full" id="card-issues" style="display:none">
+              <div class="health-card-header">
+                <div class="health-card-title">
+                  <span class="health-card-icon">⚠️</span>
+                  <div class="health-card-name">Issues &amp; Recommendations</div>
+                </div>
+              </div>
+              <div class="health-card-body" id="issues-body"></div>
+            </div>
+
+            <!-- Setup guide (full-width, collapsible) -->
+            <div class="panel relay-health-card relay-health-full" id="card-setup-guide">
+              <div class="health-card-header">
+                <div class="health-card-title">
+                  <span class="health-card-icon" id="guide-os-icon">📖</span>
+                  <div class="health-card-name" id="guide-title">Setup Guide</div>
+                </div>
+                <button class="btn btn-sm btn-secondary" id="btn-guide-toggle">Show guide</button>
+              </div>
+              <div class="health-card-body" id="guide-body" style="display:none"></div>
+            </div>
+
+          </div><!-- /relay-health-grid -->
+
+          <!-- Re-check action bar -->
+          <div class="relay-check-bar">
+            <button class="btn btn-primary btn-glow" id="btn-relay-check">🔄 Run Health Check</button>
+            <span class="form-hint" id="relay-check-time"></span>
+          </div>
+
         </div>
       </section>
 

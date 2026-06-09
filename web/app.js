@@ -22,6 +22,19 @@ document.addEventListener("DOMContentLoaded", () => {
     return fetch(url, opts);
   }
 
+  // ── Mobile sidebar ──────────────────────────────────────────────────────────
+  const sidebarEl      = document.querySelector(".sidebar");
+  const sidebarOverlay = document.getElementById("sidebar-overlay");
+  const hamburgerBtn   = document.getElementById("hamburger-btn");
+
+  function openSidebar()  { sidebarEl.classList.add("sidebar-open");    sidebarOverlay.classList.add("visible"); }
+  function closeSidebar() { sidebarEl.classList.remove("sidebar-open"); sidebarOverlay.classList.remove("visible"); }
+
+  hamburgerBtn.addEventListener("click", () =>
+    sidebarEl.classList.contains("sidebar-open") ? closeSidebar() : openSidebar()
+  );
+  sidebarOverlay.addEventListener("click", closeSidebar);
+
   // ── Tab Navigation ──────────────────────────────────────────────────────────
   const navItems = document.querySelectorAll(".nav-item");
   const tabContents = document.querySelectorAll(".tab-content");
@@ -31,7 +44,7 @@ document.addEventListener("DOMContentLoaded", () => {
     item.addEventListener("click", (e) => {
       e.preventDefault();
       const tabId = item.getAttribute("data-tab");
-      
+
       navItems.forEach(i => i.classList.remove("active"));
       tabContents.forEach(c => c.classList.remove("active"));
 
@@ -42,9 +55,13 @@ document.addEventListener("DOMContentLoaded", () => {
       state.activeTab = tabId;
       currentTabTitle.textContent = item.textContent.trim();
 
+      // Close sidebar on mobile after nav
+      if (window.innerWidth <= 768) closeSidebar();
+
       // Hook tab-specific load actions
-      if (tabId === "file-manager") loadWorkspaceFiles();
+      if (tabId === "file-manager")   loadWorkspaceFiles();
       if (tabId === "campaign-wizard" || tabId === "smtp-scanner") loadWizardOptions();
+      if (tabId === "relay-manager")  loadRelayHealth();
     });
   });
 
@@ -914,6 +931,303 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.textContent = "Generate DKIM Keys";
     }
   });
+
+  // ── Relay Manager ─────────────────────────────────────────────────────────
+
+  // Wires the "Configure in Settings" link inside the relay manager tab
+  document.querySelectorAll(".relay-settings-link").forEach(el => {
+    el.addEventListener("click", e => {
+      e.preventDefault();
+      const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+      if (settingsNav) settingsNav.click();
+    });
+  });
+
+  document.getElementById("btn-relay-check").addEventListener("click", loadRelayHealth);
+
+  document.getElementById("btn-guide-toggle").addEventListener("click", () => {
+    const body = document.getElementById("guide-body");
+    const btn  = document.getElementById("btn-guide-toggle");
+    const open = body.style.display !== "none";
+    body.style.display = open ? "none" : "block";
+    btn.textContent    = open ? "Show guide" : "Hide guide";
+  });
+
+  function makeDomEl(tag, cls, text) {
+    const el = document.createElement(tag);
+    if (cls)  el.className   = cls;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  function renderHealthDetail(container, rows) {
+    const table = makeDomEl("div", "health-detail-table");
+    for (const [key, val, cls] of rows) {
+      const row  = makeDomEl("div", "health-detail-row");
+      const k    = makeDomEl("span", "health-detail-key", key);
+      const v    = makeDomEl("span", "health-detail-val" + (cls ? ` ${cls}` : ""), val);
+      row.appendChild(k);
+      row.appendChild(v);
+      table.appendChild(row);
+    }
+    container.appendChild(table);
+  }
+
+  function renderCheckItems(container, items, cls) {
+    const icon = cls === "pass" ? "✓" : cls === "fail" ? "✗" : "⚠";
+    for (const text of items) {
+      const row  = makeDomEl("div", `health-check-item ${cls}`);
+      const ic   = makeDomEl("span", "check-icon", icon);
+      const msg  = makeDomEl("span", "", text);
+      row.appendChild(ic);
+      row.appendChild(msg);
+      container.appendChild(row);
+    }
+  }
+
+  function buildGuideLinux(container) {
+    const sections = [
+      {
+        title: "Install & configure Postfix",
+        steps: [
+          ["Install Postfix", "sudo apt-get install -y postfix"],
+          ["Restrict to loopback", "sudo postconf -e \"inet_interfaces = loopback-only\""],
+          ["Trust loopback relay", "sudo postconf -e \"mynetworks = 127.0.0.0/8\""],
+          ["Disable auth for local", "sudo postconf -e \"smtpd_relay_restrictions = permit_mynetworks,reject\""],
+          ["Enable & start", "sudo systemctl enable postfix && sudo systemctl restart postfix"],
+        ],
+      },
+      {
+        title: "Configure VPS Sender",
+        steps: [
+          ["In Settings → Transport Mode", "Select: Local MTA Relay"],
+          ["Relay Host", "127.0.0.1"],
+          ["Relay Port", "25"],
+          ["Pre-scan", "Uncheck (relay handles routing)"],
+        ],
+      },
+    ];
+    buildGuideHtml(container, sections, "🐧");
+  }
+
+  function buildGuideWindows(container) {
+    const sections = [
+      {
+        title: "Install hMailServer",
+        steps: [
+          ["Download", "hmailserver.com → Download → Windows installer"],
+          ["Run installer", "Accept defaults; choose 'Use built-in database engine'"],
+          ["Open hMailServer Admin", "Start → hMailServer Administrator"],
+          ["Create a domain", "Domains → Add → enter any domain name → Save"],
+        ],
+      },
+      {
+        title: "Allow local relay (no auth)",
+        steps: [
+          ["Go to", "Settings → Advanced → IP Ranges"],
+          ["Add range", "Name: Localhost | IP: 127.0.0.1 | Subnet: 255.255.255.255"],
+          ["Set permissions", "Require SMTP auth: unchecked | Allow deliveries: checked"],
+          ["Save & restart", "File → Exit Admin → Restart hMailServer service"],
+        ],
+      },
+      {
+        title: "Configure VPS Sender",
+        steps: [
+          ["In Settings → Transport Mode", "Select: Local MTA Relay"],
+          ["Relay Host", "127.0.0.1"],
+          ["Relay Port", "587"],
+          ["Leave user/pass blank", "(IP Range rule trusts 127.0.0.1 without auth)"],
+        ],
+      },
+    ];
+    buildGuideHtml(container, sections, "🪟");
+  }
+
+  function buildGuideMac(container) {
+    const sections = [
+      {
+        title: "Start the built-in Postfix",
+        steps: [
+          ["Edit main.cf (if needed)", "sudo nano /etc/postfix/main.cf"],
+          ["Ensure loopback only", "inet_interfaces = loopback-only"],
+          ["Start Postfix", "sudo postfix start"],
+          ["Verify listening", "sudo lsof -i :25"],
+        ],
+      },
+      {
+        title: "Configure VPS Sender",
+        steps: [
+          ["Transport Mode", "Local MTA Relay"],
+          ["Relay Host", "127.0.0.1"],
+          ["Relay Port", "25"],
+        ],
+      },
+    ];
+    buildGuideHtml(container, sections, "🍎");
+  }
+
+  function buildGuideHtml(container, sections, osIcon) {
+    for (const sec of sections) {
+      const wrap = makeDomEl("div", "guide-section");
+      wrap.appendChild(makeDomEl("h4", "", sec.title));
+      for (let i = 0; i < sec.steps.length; i++) {
+        const [label, cmd] = sec.steps[i];
+        const row = makeDomEl("div", "guide-step");
+        row.appendChild(makeDomEl("span", "guide-step-num", String(i + 1)));
+        const body = document.createElement("div");
+        body.appendChild(makeDomEl("div", "", label));
+        const code = makeDomEl("code", "guide-code", cmd);
+        body.appendChild(code);
+        row.appendChild(body);
+        wrap.appendChild(row);
+      }
+      container.appendChild(wrap);
+    }
+    document.getElementById("guide-os-icon").textContent = osIcon;
+  }
+
+  async function loadRelayHealth() {
+    // Reset badges to "Checking…" state
+    ["relay-conn-badge", "mta-status-badge"].forEach(id => {
+      const el = document.getElementById(id);
+      el.className = "health-badge checking";
+      el.textContent = "Checking…";
+    });
+    document.getElementById("relay-check-time").textContent = "";
+
+    let data;
+    try {
+      const res = await apiFetch("/api/relay/health");
+      data = await res.json();
+    } catch (e) {
+      appendLog("Relay health check failed: " + e.message, "fail");
+      return;
+    }
+
+    const isRelay  = data.transport === "relay";
+    const platform = data.os || "linux";
+
+    // Update mode banner
+    const badge = document.getElementById("relay-mode-badge");
+    const title = document.getElementById("relay-mode-title");
+    const desc  = document.getElementById("relay-mode-desc");
+    if (isRelay) {
+      badge.textContent = "Relay Mode";
+      badge.className   = "relay-mode-badge relay";
+      title.textContent = "Local MTA Relay Mode Active";
+      desc.textContent  = `Emails are routed through the local MTA at ${data.relayHost}:${data.relayPort}.`;
+    } else {
+      badge.textContent = "Direct to MX";
+      badge.className   = "relay-mode-badge";
+      title.textContent = "Direct-to-MX Mode Active";
+      desc.textContent  = "Emails resolve MX records and connect directly on port 25. No local MTA required.";
+    }
+
+    document.getElementById("relay-direct-note").style.display = isRelay ? "none" : "block";
+    document.getElementById("relay-health-grid").style.display  = isRelay ? "grid" : "none";
+
+    if (!isRelay) {
+      document.getElementById("relay-check-time").textContent = `Last checked: ${new Date().toLocaleTimeString()}`;
+      return;
+    }
+
+    // ── Connection card ──────────────────────────────────────────────────────
+    const connTarget = document.getElementById("relay-conn-target");
+    const connBadge  = document.getElementById("relay-conn-badge");
+    const connBody   = document.getElementById("relay-conn-body");
+    connTarget.textContent = `${data.relayHost}:${data.relayPort}`;
+    connBody.textContent   = "";
+
+    if (data.connection.ok) {
+      connBadge.className   = "health-badge ok";
+      connBadge.textContent = "✓ Reachable";
+      renderHealthDetail(connBody, [
+        ["Host", data.relayHost],
+        ["Port", String(data.relayPort)],
+        ["TCP connect", "success", "ok"],
+      ]);
+    } else {
+      connBadge.className   = "health-badge err";
+      connBadge.textContent = "✗ Unreachable";
+      renderHealthDetail(connBody, [
+        ["Host", data.relayHost],
+        ["Port", String(data.relayPort)],
+        ["Error", data.connection.error || "connection refused", "err"],
+      ]);
+      renderCheckItems(connBody, ["Cannot reach relay port — check that the MTA is running and listening."], "fail");
+    }
+
+    // ── MTA status card ──────────────────────────────────────────────────────
+    const mtaIcon   = document.getElementById("mta-icon");
+    const mtaName   = document.getElementById("mta-card-name");
+    const mtaTarget = document.getElementById("mta-card-target");
+    const mtaBadge  = document.getElementById("mta-status-badge");
+    const mtaBody   = document.getElementById("mta-body");
+    mtaBody.textContent = "";
+
+    const mta = data.mta;
+    const osLabels = { linux: ["🐧 Postfix", "Linux"], darwin: ["🍎 Postfix", "macOS"], win32: ["🪟 hMailServer", "Windows"] };
+    const [mtaLabel, osLabel] = osLabels[platform] || ["⚙️ MTA", "Unknown OS"];
+    mtaIcon.textContent   = mtaLabel.split(" ")[0];
+    mtaName.textContent   = mtaLabel.split(" ").slice(1).join(" ") + " Status";
+    mtaTarget.textContent = osLabel;
+
+    if (!mta.detected) {
+      mtaBadge.className   = "health-badge err";
+      mtaBadge.textContent = "✗ Not Found";
+    } else if (!mta.active) {
+      mtaBadge.className   = "health-badge err";
+      mtaBadge.textContent = "✗ Not Running";
+    } else if (mta.warnings.length > 0) {
+      mtaBadge.className   = "health-badge warn";
+      mtaBadge.textContent = "⚠ Running";
+    } else {
+      mtaBadge.className   = "health-badge ok";
+      mtaBadge.textContent = "✓ Running";
+    }
+
+    // Detail rows from mta.details object
+    const detailRows = Object.entries(mta.details || {}).map(([k, v]) => [k.replace(/_/g, " "), String(v)]);
+    if (detailRows.length) renderHealthDetail(mtaBody, detailRows);
+
+    // Pass checks
+    if (mta.active) renderCheckItems(mtaBody, ["MTA service is active and running"], "pass");
+    if (platform === "linux" && mta.details.inet_interfaces === "loopback-only")
+      renderCheckItems(mtaBody, ["inet_interfaces = loopback-only ✓"], "pass");
+    if (platform === "linux" && (mta.details.mynetworks || "").includes("127.0.0.0"))
+      renderCheckItems(mtaBody, ["mynetworks includes 127.0.0.0/8 ✓"], "pass");
+
+    // ── Issues & warnings card ───────────────────────────────────────────────
+    const allIssues   = [...(mta.issues || [])];
+    const allWarnings = [...(mta.warnings || [])];
+    if (!data.connection.ok) allIssues.unshift(`TCP connection to ${data.relayHost}:${data.relayPort} failed — ${data.connection.error}`);
+
+    const issuesCard = document.getElementById("card-issues");
+    const issuesBody = document.getElementById("issues-body");
+    issuesBody.textContent = "";
+
+    if (allIssues.length || allWarnings.length) {
+      issuesCard.style.display = "block";
+      renderCheckItems(issuesBody, allIssues, "fail");
+      renderCheckItems(issuesBody, allWarnings, "warn");
+    } else {
+      issuesCard.style.display = "none";
+      renderCheckItems(mtaBody, ["No issues detected — relay looks healthy"], "pass");
+    }
+
+    // ── Setup guide ──────────────────────────────────────────────────────────
+    const guideTitle = document.getElementById("guide-title");
+    const guideBody  = document.getElementById("guide-body");
+    guideBody.textContent = "";
+    guideTitle.textContent = platform === "win32" ? "hMailServer Setup Guide (Windows)" :
+                             platform === "darwin" ? "Postfix Setup Guide (macOS)" :
+                                                     "Postfix Setup Guide (Linux)";
+    if (platform === "win32")      buildGuideWindows(guideBody);
+    else if (platform === "darwin") buildGuideMac(guideBody);
+    else                            buildGuideLinux(guideBody);
+
+    document.getElementById("relay-check-time").textContent = `Last checked: ${new Date().toLocaleTimeString()}`;
+  }
 
   async function loadSettings() {
     try {

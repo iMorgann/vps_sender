@@ -93,7 +93,17 @@ let engineState = {
 };
 let campaignCancelToken = { cancelled: false, paused: false };
 
+// Ring-buffer so reconnecting browsers (any device) see recent activity
+const recentLogs = [];         // last 150 log lines
+let   lastProgress = null;     // last campaign_progress snapshot
+
 function broadcastSSE(data) {
+  if (data.type === "log") {
+    recentLogs.push(data);
+    if (recentLogs.length > 150) recentLogs.shift();
+  } else if (data.type === "campaign_progress") {
+    lastProgress = data;
+  }
   const payload = `data: ${JSON.stringify(data)}\n\n`;
   webClients = webClients.filter(res => {
     try { res.write(payload); return true; } catch { return false; }
@@ -677,7 +687,12 @@ async function startWebServer() {
     if (req.method === "GET" && pathname === "/api/stream") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
       webClients.push(res);
+      // Always send current engine state first
       res.write(`data: ${JSON.stringify({ type: "state", status: engineState.status })}\n\n`);
+      // Replay last progress snapshot so a reconnecting browser restores stats/progress bar
+      if (lastProgress) res.write(`data: ${JSON.stringify(lastProgress)}\n\n`);
+      // Replay recent logs so the reconnecting browser sees what happened while it was away
+      for (const entry of recentLogs) res.write(`data: ${JSON.stringify(entry)}\n\n`);
       req.on("close", () => { webClients = webClients.filter(c => c !== res); });
       return;
     }
@@ -1019,6 +1034,8 @@ async function startWebServer() {
           res.end(JSON.stringify({ error: "Engine busy" }));
           return;
         }
+        recentLogs.length = 0;
+        lastProgress      = null;
         const body = await getJsonBody();
         const rawFile = safeWorkspacePath(body.file);
         if (!rawFile) {
@@ -1092,6 +1109,8 @@ async function startWebServer() {
           res.end(JSON.stringify({ error: "Engine busy" }));
           return;
         }
+        recentLogs.length = 0;
+        lastProgress      = null;
         campaignCancelToken = { cancelled: false, paused: false };
         runWebCampaign().catch(err => {
           broadcastSSE({ type: "log", text: `Campaign error: ${err.message}`, logClass: "fail" });
@@ -1169,6 +1188,71 @@ async function startWebServer() {
           },
           os: process.platform,
         }));
+        return;
+      }
+
+      // ── Relay health check ───────────────────────────────────────────────
+      if (req.method === "GET" && pathname === "/api/relay/health") {
+        const config    = getCachedConfig();
+        const transport = config.transport || "direct";
+        const rHost     = config.relayHost || "127.0.0.1";
+        const rPort     = config.relayPort || 587;
+        const platform  = process.platform;
+
+        // TCP connection test
+        const connResult = await new Promise(resolve => {
+          const net   = require("net");
+          const sock  = new net.Socket();
+          const timer = setTimeout(() => { sock.destroy(); resolve({ ok: false, error: "timeout after 5s" }); }, 5000);
+          sock.connect(rPort, rHost, () => { clearTimeout(timer); sock.destroy(); resolve({ ok: true }); });
+          sock.on("error", e => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+        });
+
+        const mta = { detected: null, active: false, details: {}, issues: [], warnings: [] };
+        const { execFile } = require("child_process");
+        const sh  = platform === "win32" ? ["cmd", ["/c"]] : ["/bin/sh", ["-c"]];
+        const run = cmd => new Promise(r => execFile(sh[0], [...sh[1], cmd], { timeout: 5000 }, (_e, out) => r((out || "").trim())));
+
+        if (platform === "linux") {
+          const [svc, iface, nets, port25] = await Promise.all([
+            run("systemctl is-active postfix 2>/dev/null || echo inactive"),
+            run("postconf -h inet_interfaces 2>/dev/null || echo unknown"),
+            run("postconf -h mynetworks 2>/dev/null || echo unknown"),
+            run("ss -tlnp 'sport = :25' 2>/dev/null | tail -n +2 | head -3 || echo ''"),
+          ]);
+          mta.detected = "postfix";
+          mta.active   = svc === "active";
+          mta.details  = { service: svc, inet_interfaces: iface, mynetworks: nets, port25_listeners: port25 || "(none)" };
+          if (!mta.active) mta.issues.push("Postfix is not running. Fix: sudo systemctl start postfix && sudo systemctl enable postfix");
+          if (iface !== "unknown" && !iface.includes("loopback") && iface !== "127.0.0.1")
+            mta.warnings.push(`inet_interfaces = "${iface}" — expected "loopback-only" to restrict to localhost`);
+          if (nets !== "unknown" && !nets.includes("127.0.0.0") && !nets.includes("127.0.0.1"))
+            mta.warnings.push(`mynetworks = "${nets}" — 127.0.0.0/8 should be included to trust loopback relay`);
+        } else if (platform === "darwin") {
+          const [iface, launchd] = await Promise.all([
+            run("postconf -h inet_interfaces 2>/dev/null || echo unknown"),
+            run("launchctl list 2>/dev/null | grep postfix || echo ''"),
+          ]);
+          mta.detected = "postfix";
+          mta.active   = launchd.includes("postfix");
+          mta.details  = { service: mta.active ? "running (launchctl)" : "not running", inet_interfaces: iface };
+          if (!mta.active) mta.issues.push("Postfix is not running on macOS. Fix: sudo postfix start");
+        } else if (platform === "win32") {
+          const svcOut = await run("sc query hMailServer 2>nul");
+          if (svcOut && !svcOut.toLowerCase().includes("does not exist")) {
+            mta.detected = "hmailserver";
+            mta.active   = svcOut.includes("RUNNING");
+            const m = svcOut.match(/STATE\s*:\s*\d+\s+([A-Z_]+)/);
+            mta.details.service = m ? m[1] : svcOut.slice(0, 80).trim();
+            if (!mta.active) mta.issues.push("hMailServer service is not running. Start it via Windows Services or hMailServer Admin.");
+            mta.warnings.push("Verify: hMailServer Admin → Settings → Advanced → IP Ranges → 127.0.0.1 must allow relay without authentication.");
+          } else {
+            mta.issues.push("hMailServer service not found. Download from hmailserver.com, install it, create a domain, and add an IP Range rule for 127.0.0.1 to allow relay on port 587 without auth.");
+          }
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ os: platform, transport, relayHost: rHost, relayPort: rPort, connection: connResult, mta }));
         return;
       }
 
