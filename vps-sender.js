@@ -1241,6 +1241,17 @@ async function startWebServer() {
         return;
       }
 
+      // ── IP Blacklist / RBL check ─────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/api/blacklist-check") {
+        const { checkAllBlacklists } = require("./lib/scanner/blacklist");
+        let ip = "";
+        try { ip = await detectSendingIp(); } catch { /* ignore */ }
+        const result = await checkAllBlacklists(ip);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
       // ── DKIM key generation ──────────────────────────────────────────────
       if (req.method === "POST" && pathname === "/api/dkim/generate") {
         const body     = await getJsonBody();

@@ -1585,6 +1585,78 @@ select.form-control option:hover {
 .test-send-status.fail    { color: var(--error); }
 .test-send-status.pending { color: var(--text-dim); }
 
+/* ── IP Reputation / Blacklist Panel ────────────────────────────────────────── */
+.reputation-panel { margin-top: 16px; }
+.reputation-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.blacklist-results { margin-top: 12px; }
+.blacklist-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-weight: 500;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.blacklist-banner.clean  { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.25); }
+.blacklist-banner.listed { background: rgba(244,63,94,0.1);  color: var(--error);   border: 1px solid rgba(244,63,94,0.25); }
+.blacklist-banner-icon   { font-size: 18px; font-weight: 700; }
+.blacklist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.blacklist-row:last-of-type { border-bottom: none; }
+.blacklist-row.listed { color: var(--text-main); }
+.blacklist-row.clean  { color: var(--text-dim); }
+.bl-icon { font-weight: 700; min-width: 14px; }
+.bl-icon-ok   { color: var(--success); }
+.bl-icon-fail { color: var(--error); }
+.bl-name { flex: 1; }
+.bl-delist-btn { margin-left: auto; }
+.blacklist-timestamp { margin-top: 8px; font-size: 11px; }
+.blacklist-tips-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.blacklist-tips-section summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
+  user-select: none;
+  list-style: none;
+}
+.blacklist-tips-section summary::before { content: "▶ "; font-size: 10px; }
+.blacklist-tips-section[open] summary::before { content: "▼ "; }
+.blacklist-tips-section summary:hover { color: var(--text-main); }
+.blacklist-tips-list {
+  margin: 10px 0 0 16px;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+.blacklist-tips-list li { margin-bottom: 6px; }
+.blacklist-tips-list code {
+  background: var(--surface);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-main);
+}
+
 /* ── Relay Manager Tab ──────────────────────────────────────────────────────── */
 
 #tab-relay-manager.active {

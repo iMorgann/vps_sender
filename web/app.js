@@ -2061,6 +2061,89 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // ── Blacklist / RBL Check ───────────────────────────────────────────────────
+  const btnBlacklistCheck = document.getElementById("btn-blacklist-check");
+  const blacklistResults  = document.getElementById("blacklist-results");
+
+  if (btnBlacklistCheck) {
+    btnBlacklistCheck.addEventListener("click", async () => {
+      btnBlacklistCheck.disabled = true;
+      blacklistResults.replaceChildren();
+      const loading = document.createElement("p");
+      loading.className = "form-hint";
+      loading.textContent = "Checking 8 blocklists…";
+      blacklistResults.appendChild(loading);
+      try {
+        const res  = await apiFetch("/api/blacklist-check", "POST");
+        const data = await res.json();
+        blacklistResults.replaceChildren();
+        renderBlacklistResults(data);
+      } catch (err) {
+        blacklistResults.textContent = "Error: " + err.message;
+      } finally {
+        btnBlacklistCheck.disabled = false;
+      }
+    });
+  }
+
+  function renderBlacklistResults(data) {
+    const listedCount = data.listed.length;
+
+    // Summary banner
+    const banner = document.createElement("div");
+    banner.className = `blacklist-banner ${listedCount === 0 ? "clean" : "listed"}`;
+    const bannerIcon = document.createElement("span");
+    bannerIcon.className = "blacklist-banner-icon";
+    bannerIcon.textContent = listedCount === 0 ? "✓" : "✗";
+    const bannerText = document.createElement("span");
+    bannerText.textContent = listedCount === 0
+      ? `IP ${data.ip} is clean on all ${data.clean.length} checked lists`
+      : `IP ${data.ip} is listed on ${listedCount} of ${listedCount + data.clean.length} lists`;
+    banner.appendChild(bannerIcon);
+    banner.appendChild(bannerText);
+    blacklistResults.appendChild(banner);
+
+    // Listed rows first — red, with delist link
+    data.listed.forEach(entry => {
+      const row = document.createElement("div");
+      row.className = "blacklist-row listed";
+      const ic = document.createElement("span");
+      ic.className = "bl-icon bl-icon-fail";
+      ic.textContent = "✗";
+      const nm = document.createElement("span");
+      nm.className = "bl-name";
+      nm.textContent = entry.name;
+      const lnk = document.createElement("a");
+      lnk.href = entry.delist;
+      lnk.target = "_blank";
+      lnk.rel = "noopener noreferrer";
+      lnk.className = "btn btn-sm btn-danger-sm bl-delist-btn";
+      lnk.textContent = "Request Delist →";
+      row.append(ic, nm, lnk);
+      blacklistResults.appendChild(row);
+    });
+
+    // Clean rows — dimmed green
+    data.clean.forEach(entry => {
+      const row = document.createElement("div");
+      row.className = "blacklist-row clean";
+      const ic = document.createElement("span");
+      ic.className = "bl-icon bl-icon-ok";
+      ic.textContent = "✓";
+      const nm = document.createElement("span");
+      nm.className = "bl-name";
+      nm.textContent = entry.name;
+      row.append(ic, nm);
+      blacklistResults.appendChild(row);
+    });
+
+    // Timestamp
+    const ts = document.createElement("p");
+    ts.className = "form-hint blacklist-timestamp";
+    ts.textContent = `Checked at ${new Date(data.checkedAt).toLocaleTimeString()}`;
+    blacklistResults.appendChild(ts);
+  }
+
   // ── Initial Load ────────────────────────────────────────────────────────────
   loadSettings();
   loadWizardOptions();

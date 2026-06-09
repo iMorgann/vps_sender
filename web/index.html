@@ -192,6 +192,31 @@
           </div>
           <div id="test-send-status" class="test-send-status"></div>
         </div>
+
+        <!-- IP Reputation Check -->
+        <div class="panel reputation-panel">
+          <div class="reputation-header">
+            <div>
+              <h3>IP Reputation Check</h3>
+              <p class="section-desc">Check your sending IP against 8 major blocklists (Spamhaus, Mailspike, Barracuda, and more).</p>
+            </div>
+            <button id="btn-blacklist-check" class="btn btn-secondary">Check Now</button>
+          </div>
+          <div id="blacklist-results" class="blacklist-results"></div>
+          <details class="blacklist-tips-section">
+            <summary>How to Reduce Blacklisting Risk</summary>
+            <ul class="blacklist-tips-list">
+              <li><strong>Set rDNS/PTR correctly</strong> — your IP must reverse-resolve to your mail hostname (e.g. <code>mail.yourdomain.com</code>). Set in your VPS control panel.</li>
+              <li><strong>Configure SPF, DKIM &amp; DMARC</strong> — use the Sending Domains tab to verify all three are passing.</li>
+              <li><strong>Warm up gradually</strong> — enable Send Warmup in Settings → Advanced. Start at 50–100 emails/day and increase slowly over 2–4 weeks.</li>
+              <li><strong>Rate-limit per provider</strong> — set conservative per-minute/per-hour limits in Settings → Advanced → Rate Limits, especially for Gmail and Outlook.</li>
+              <li><strong>Keep your list clean</strong> — only send to opted-in recipients. Use a suppression file (Settings → Advanced) to skip hard bounces.</li>
+              <li><strong>Include an unsubscribe link</strong> — required by Gmail/Yahoo since 2024. Set <code>unsubscribeBaseUrl</code> in Settings → General.</li>
+              <li><strong>Monitor bounces</strong> — any <code>550 5.7.1 blocked</code> rejection means the IP is listed. Stop sending and delist before resuming.</li>
+              <li><strong>Use a dedicated IP per domain</strong> — mixing domains on one IP means one bad domain poisons the IP for all others.</li>
+            </ul>
+          </details>
+        </div>
       </section>
 
       <!-- Tab Content: Campaign Wizard -->
