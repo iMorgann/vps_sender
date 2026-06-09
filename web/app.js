@@ -59,9 +59,10 @@ document.addEventListener("DOMContentLoaded", () => {
       if (window.innerWidth <= 768) closeSidebar();
 
       // Hook tab-specific load actions
-      if (tabId === "file-manager")   loadWorkspaceFiles();
+      if (tabId === "file-manager")    loadWorkspaceFiles();
       if (tabId === "campaign-wizard" || tabId === "smtp-scanner") loadWizardOptions();
-      if (tabId === "relay-manager")  loadRelayHealth();
+      if (tabId === "relay-manager")   loadRelayHealth();
+      if (tabId === "sending-domains") loadSendingDomains();
     });
   });
 
@@ -249,8 +250,9 @@ document.addEventListener("DOMContentLoaded", () => {
       htmlFiles: checkedBodies,
       attachmentFiles: checkedAttachments,
       smtpFile: document.getElementById("wizard-smtp-file").value,
-      rotEvery: parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
-      resume: document.getElementById("wizard-resume").checked
+      rotEvery:       parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
+      resume:         document.getElementById("wizard-resume").checked,
+      domainRotation: document.getElementById("wizard-domain-rotation").checked
     };
 
     try {
@@ -887,50 +889,435 @@ document.addEventListener("DOMContentLoaded", () => {
     toggleRelayFields(e.target.value === "relay");
   });
 
-  // ── DKIM generate ────────────────────────────────────────────────────────────
-  document.getElementById("btn-generate-dkim").addEventListener("click", async () => {
-    const domain   = document.getElementById("settings-dkim-domain").value.trim();
-    const selector = document.getElementById("settings-dkim-selector").value.trim() || "mail";
-    if (!domain) { alert("Enter a domain first."); return; }
+  // ── Settings sub-tabs ───────────────────────────────────────────────────────
+  document.querySelectorAll(".settings-subtab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const stab = btn.getAttribute("data-stab");
+      document.querySelectorAll(".settings-subtab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".settings-tab-panel").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const panel = document.querySelector(`.settings-tab-panel[data-stab="${stab}"]`);
+      if (panel) panel.classList.add("active");
+    });
+  });
 
-    const btn = document.getElementById("btn-generate-dkim");
+  // ── Sending Domains ──────────────────────────────────────────────────────────
+  const addDomainForm   = document.getElementById("add-domain-form");
+  const domainListEl    = document.getElementById("domain-list");
+  const domainListEmpty = document.getElementById("domain-list-empty");
+
+  document.getElementById("btn-add-domain-toggle").addEventListener("click", () => {
+    const visible = addDomainForm.style.display !== "none";
+    addDomainForm.style.display = visible ? "none" : "block";
+    document.getElementById("add-domain-error").style.display = "none";
+    if (!visible) document.getElementById("new-domain-name").focus();
+  });
+
+  document.getElementById("btn-cancel-add-domain").addEventListener("click", () => {
+    addDomainForm.style.display = "none";
+    document.getElementById("new-domain-name").value     = "";
+    document.getElementById("new-domain-selector").value = "mail";
+  });
+
+  document.getElementById("btn-refresh-domains").addEventListener("click", loadSendingDomains);
+
+  document.getElementById("btn-generate-domain-keys").addEventListener("click", async () => {
+    const domain   = document.getElementById("new-domain-name").value.trim();
+    const selector = document.getElementById("new-domain-selector").value.trim() || "mail";
+    const errEl    = document.getElementById("add-domain-error");
+    errEl.style.display = "none";
+    if (!domain) { errEl.textContent = "Enter a domain name."; errEl.style.display = "block"; return; }
+
+    const btn = document.getElementById("btn-generate-domain-keys");
     btn.disabled = true;
     btn.textContent = "Generating…";
-
     try {
       const res  = await apiFetch("/api/dkim/generate", "POST", { domain, selector });
       const data = await res.json();
-      if (!data.success) { alert("DKIM generation failed: " + (data.error || "unknown error")); return; }
-
-      document.getElementById("dns-spf-name").textContent  = data.dns.spf.name  + "   (TXT)";
-      document.getElementById("dns-spf-value").textContent = data.dns.spf.value;
-      document.getElementById("dns-dkim-name").textContent = data.dns.dkim.name + "   (TXT)";
-      document.getElementById("dns-dkim-value").textContent= data.dns.dkim.value;
-      document.getElementById("dns-dmarc-name").textContent= data.dns.dmarc.name + "   (TXT)";
-      document.getElementById("dns-dmarc-value").textContent = data.dns.dmarc.value;
-
-      const mtaEl = document.getElementById("dkim-mta-instructions");
-      mtaEl.textContent = "";
-      const p = document.createElement("p");
-      p.className = "form-hint";
-      if (data.os === "win32") {
-        p.textContent = `Windows (hMailServer): In hMailServer Admin, go to Domains → ${domain} → DKIM Signing, enable it, set selector to "${selector}", and paste the private key from dkim/${domain}.pem.`;
-      } else {
-        p.textContent = `Linux/Mac (Postfix): The private key was saved to dkim/${domain}.pem. Add the DKIM record to DNS, then reload Postfix: sudo postfix reload`;
-      }
-      mtaEl.appendChild(p);
-
-      document.getElementById("dkim-result").style.display = "block";
+      if (!data.success) { errEl.textContent = "Failed: " + (data.error || "unknown error"); errEl.style.display = "block"; return; }
       appendLog(`DKIM keys generated for ${domain} (selector: ${selector})`, "sent");
-      // Refresh DKIM config textarea
-      loadSettings();
+      addDomainForm.style.display = "none";
+      document.getElementById("new-domain-name").value     = "";
+      document.getElementById("new-domain-selector").value = "mail";
+      await loadSendingDomains();
+      // Auto-expand the DNS panel for the newly created domain
+      const row = domainListEl.querySelector(`[data-domain="${CSS.escape(domain)}"]`);
+      if (row) row.querySelector(".btn-domain-dns")?.click();
     } catch (e) {
-      alert("Error generating DKIM keys: " + e.message);
+      errEl.textContent = "Error: " + e.message;
+      errEl.style.display = "block";
     } finally {
       btn.disabled = false;
-      btn.textContent = "Generate DKIM Keys";
+      btn.textContent = "Generate Keys";
     }
   });
+
+  async function loadSendingDomains() {
+    try {
+      const res  = await apiFetch("/api/domains");
+      const list = await res.json();
+      renderDomainList(list);
+    } catch {
+      domainListEmpty.textContent = "Failed to load domains.";
+      domainListEmpty.style.display = "block";
+    }
+  }
+
+  function renderDomainList(list) {
+    // Remove all existing domain rows (keep the empty placeholder)
+    domainListEl.querySelectorAll(".domain-row").forEach(el => el.remove());
+    if (!list.length) {
+      domainListEmpty.style.display = "block";
+      return;
+    }
+    domainListEmpty.style.display = "none";
+    list.forEach(item => {
+      const row = buildDomainRow(item);
+      domainListEl.appendChild(row);
+    });
+  }
+
+  function buildDomainRow(item) {
+    const row = document.createElement("div");
+    row.className = "domain-row";
+    row.setAttribute("data-domain", item.domain);
+
+    const keyBadge = document.createElement("span");
+    keyBadge.className = "domain-key-badge " + (item.hasKey ? "badge-ok" : "badge-warn");
+    keyBadge.textContent = item.hasKey ? "🔑 Key ✓" : "🔑 Key ✗";
+
+    const info = document.createElement("div");
+    info.className = "domain-row-info";
+    const nameEl = document.createElement("span");
+    nameEl.className = "domain-name";
+    nameEl.textContent = item.domain;
+    const selEl = document.createElement("span");
+    selEl.className = "domain-selector-badge";
+    selEl.textContent = "sel: " + item.selector;
+    info.appendChild(nameEl);
+    info.appendChild(selEl);
+    info.appendChild(keyBadge);
+
+    const actions = document.createElement("div");
+    actions.className = "domain-row-actions";
+
+    if (item.hasKey) {
+      const dnsBtn = document.createElement("button");
+      dnsBtn.type = "button";
+      dnsBtn.className = "btn btn-sm btn-secondary btn-domain-dns";
+      dnsBtn.textContent = "DNS Records";
+      dnsBtn.addEventListener("click", () => toggleDomainDetail(row, item, "dns"));
+      actions.appendChild(dnsBtn);
+    }
+
+    const verifyBtn = document.createElement("button");
+    verifyBtn.type = "button";
+    verifyBtn.className = "btn btn-sm btn-secondary btn-domain-verify";
+    verifyBtn.textContent = "Verify DNS";
+    verifyBtn.addEventListener("click", () => toggleDomainDetail(row, item, "verify"));
+    actions.appendChild(verifyBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn btn-sm btn-danger btn-domain-delete";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteDomain(item.domain, item.hasKey));
+    actions.appendChild(delBtn);
+
+    const detail = document.createElement("div");
+    detail.className = "domain-detail-panel";
+    detail.style.display = "none";
+
+    row.appendChild(info);
+    row.appendChild(actions);
+    row.appendChild(detail);
+    return row;
+  }
+
+  async function runHealthCheck(detail, item, row) {
+    detail.textContent = "";
+    const loading = document.createElement("p");
+    loading.className = "form-hint";
+    loading.textContent = "Running DNS health check…";
+    detail.appendChild(loading);
+    try {
+      const res  = await apiFetch("/api/sender-health", "POST", { domain: item.domain, selector: item.selector });
+      const data = await res.json();
+      detail.textContent = "";
+      renderHealthResult(detail, data, item, row);
+    } catch (e) {
+      loading.textContent = "Error: " + e.message;
+    }
+  }
+
+  async function toggleDomainDetail(row, item, mode) {
+    const detail = row.querySelector(".domain-detail-panel");
+    const sameMode = detail.getAttribute("data-mode") === mode && detail.style.display !== "none";
+    if (sameMode) { detail.style.display = "none"; detail.removeAttribute("data-mode"); return; }
+
+    detail.setAttribute("data-mode", mode);
+    detail.style.display = "block";
+
+    if (mode === "dns") {
+      detail.textContent = "";
+      const loading = document.createElement("p");
+      loading.className = "form-hint";
+      loading.textContent = "Loading DNS records…";
+      detail.appendChild(loading);
+      try {
+        const res  = await apiFetch(`/api/domains/${encodeURIComponent(item.domain)}/dns`);
+        const data = await res.json();
+        if (data.error) { loading.textContent = "Error: " + data.error; return; }
+        detail.textContent = "";
+        renderDnsRecords(detail, data.dns);
+      } catch (e) {
+        loading.textContent = "Error: " + e.message;
+      }
+    } else {
+      await runHealthCheck(detail, item, row);
+    }
+  }
+
+  function renderDnsRecords(container, dns) {
+    const title = document.createElement("p");
+    title.className = "form-hint dns-records-title";
+    title.textContent = "Add all 6 of these records in your domain registrar (DNS settings):";
+    container.appendChild(title);
+
+    const records = [
+      { label: "A",     desc: "Points your domain root to your server — needed for HELO resolution and reputation",  rec: dns.a_root },
+      { label: "A",     desc: "Points mail.yourdomain to your server — used as the EHLO hostname",                   rec: dns.a_mail },
+      { label: "MX",    desc: "Tells other servers where to send bounces and replies for your domain",                rec: dns.mx    },
+      { label: "SPF",   desc: "Authorizes your server IP to send email for this domain (prevents spoofing)",         rec: dns.spf   },
+      { label: "DKIM",  desc: "Cryptographic signature so receivers can verify emails came from you",                 rec: dns.dkim  },
+      { label: "DMARC", desc: "Policy for what to do with mail that fails SPF/DKIM — protects your domain name",     rec: dns.dmarc },
+    ].filter(r => r.rec); // skip any records not present (e.g. old cached responses)
+
+    records.forEach(({ label, desc, rec }) => {
+      const block = document.createElement("div");
+      block.className = "dns-copy-row";
+
+      const header = document.createElement("div");
+      header.className = "dns-copy-header";
+      const lbl = document.createElement("span");
+      lbl.className = "dns-copy-label";
+      lbl.textContent = label;
+      const descEl = document.createElement("span");
+      descEl.className = "dns-copy-desc";
+      descEl.textContent = desc;
+      header.appendChild(lbl);
+      header.appendChild(descEl);
+
+      const nameRow = document.createElement("div");
+      nameRow.className = "dns-copy-field-row";
+      const nameLbl = document.createElement("span");
+      nameLbl.className = "dns-field-label";
+      nameLbl.textContent = "Name / Host:";
+      const nameVal = document.createElement("code");
+      nameVal.className = "dns-copy-val";
+      nameVal.textContent = rec.name;
+      const nameCopy = makeCopyBtn(rec.name);
+      nameRow.appendChild(nameLbl);
+      nameRow.appendChild(nameVal);
+      nameRow.appendChild(nameCopy);
+
+      const typeRow = document.createElement("div");
+      typeRow.className = "dns-copy-field-row";
+      const typeLbl = document.createElement("span");
+      typeLbl.className = "dns-field-label";
+      typeLbl.textContent = "Type:";
+      const typeVal = document.createElement("code");
+      typeVal.className = "dns-copy-val";
+      typeVal.textContent = "TXT";
+      typeRow.appendChild(typeLbl);
+      typeRow.appendChild(typeVal);
+
+      const valRow = document.createElement("div");
+      valRow.className = "dns-copy-field-row";
+      const valLbl = document.createElement("span");
+      valLbl.className = "dns-field-label";
+      valLbl.textContent = "Value:";
+      const valEl = document.createElement("code");
+      valEl.className = "dns-copy-val dns-copy-val-long";
+      valEl.textContent = rec.value;
+      const valCopy = makeCopyBtn(rec.value);
+      valRow.appendChild(valLbl);
+      valRow.appendChild(valEl);
+      valRow.appendChild(valCopy);
+
+      block.appendChild(header);
+      block.appendChild(nameRow);
+      block.appendChild(typeRow);
+      block.appendChild(valRow);
+      container.appendChild(block);
+    });
+
+    const ptrNote = document.createElement("div");
+    ptrNote.className = "dns-ptr-note";
+    ptrNote.textContent = "PTR / rDNS: Cannot be set in your registrar — contact your VPS/hosting provider to set a reverse DNS record for your sending IP.";
+    container.appendChild(ptrNote);
+  }
+
+  function makeCopyBtn(text) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm btn-secondary dns-copy-btn";
+    btn.textContent = "Copy";
+    btn.addEventListener("click", () => {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+      });
+    });
+    return btn;
+  }
+
+  function renderHealthResult(container, data, item, row) {
+    if (data.error) {
+      const errP = document.createElement("p");
+      errP.className = "form-hint";
+      errP.style.color = "var(--error)";
+      errP.textContent = "Health check failed: " + data.error;
+      container.appendChild(errP);
+      return;
+    }
+
+    const aRootOk  = !!data.aRoot?.hasRecord;
+    const aMailOk  = !!data.aMail?.hasRecord;
+    const mxOk     = !!data.mx?.hasRecord;
+    const spfOk    = data.spf?.strength  !== "none";
+    const dkimOk   = !!data.dkim?.exists;
+    const dmarcOk  = !!data.dmarc?.raw;
+    const ptrOk    = !!data.ptr?.matches;
+    const dnsReady = aRootOk && aMailOk && mxOk && spfOk && dkimOk && dmarcOk; // PTR is advisory
+
+    // Top-level READY / NOT READY banner
+    const banner = document.createElement("div");
+    banner.className = "ready-banner " + (dnsReady ? "ready-banner-ok" : "ready-banner-fail");
+    const bannerIcon = document.createElement("span");
+    bannerIcon.className = "ready-banner-icon";
+    bannerIcon.textContent = dnsReady ? "✅" : "❌";
+    const bannerText = document.createElement("span");
+    bannerText.textContent = dnsReady
+      ? "Ready to Send — all DNS records are configured correctly"
+      : "Not Ready — fix the issues below before sending";
+    banner.appendChild(bannerIcon);
+    banner.appendChild(bannerText);
+    container.appendChild(banner);
+
+    // Update the domain row status badge
+    if (row) {
+      let statusBadge = row.querySelector(".domain-ready-badge");
+      if (!statusBadge) {
+        statusBadge = document.createElement("span");
+        statusBadge.className = "domain-ready-badge";
+        const infoEl = row.querySelector(".domain-row-info");
+        if (infoEl) infoEl.appendChild(statusBadge);
+      }
+      statusBadge.className = "domain-ready-badge " + (dnsReady ? "badge-ok" : "badge-warn");
+      statusBadge.textContent = dnsReady ? "✅ Ready" : "❌ Not Ready";
+    }
+
+    const ip = data.sendingIp || "";
+    const checks = [
+      { label: "A record (root)",  ok: aRootOk,  detail: aRootOk  ? `✓ ${data.aRoot.addrs.join(", ")}` : `No A record for ${item.domain} — add A → ${ip || "<server-ip>"}` },
+      { label: "A record (mail.)", ok: aMailOk,  detail: aMailOk  ? `✓ ${data.aMail.addrs.join(", ")}` : `No A record for mail.${item.domain} — add A → ${ip || "<server-ip>"}` },
+      { label: "MX record",        ok: mxOk,     detail: mxOk     ? `✓ ${data.mx.host}` : `No MX record for ${item.domain} — add MX 10 mail.${item.domain}` },
+      { label: "SPF",              ok: spfOk,    detail: data.spf?.raw   || `No SPF TXT record — add: v=spf1 ip4:${ip || "<ip>"} ~all` },
+      { label: "DKIM",             ok: dkimOk,   detail: dkimOk   ? `✓ Found at ${item.selector}._domainkey.${item.domain}` : `No DKIM TXT record at ${item.selector}._domainkey.${item.domain}` },
+      { label: "DMARC",            ok: dmarcOk,  detail: data.dmarc?.raw || `No DMARC TXT record — add v=DMARC1; p=none at _dmarc.${item.domain}` },
+      { label: "PTR/rDNS",         ok: ptrOk,    detail: data.ptr?.ptr ? (ptrOk ? `✓ ${data.ptr.ptr} (forward-confirmed)` : `${data.ptr.ptr} — does not resolve back to ${ip} (FCrDNS mismatch)`) : "No PTR — contact your VPS host to set reverse DNS" },
+    ];
+
+    checks.forEach(({ label, ok, detail }) => {
+      const checkRow = document.createElement("div");
+      checkRow.className = "health-check-item " + (ok ? "check-ok" : "check-warn");
+      const icon = document.createElement("span");
+      icon.className = "check-icon";
+      icon.textContent = ok ? "✓" : "⚠";
+      const labelEl = document.createElement("span");
+      labelEl.className = "check-label";
+      labelEl.textContent = label + ":";
+      const detailEl = document.createElement("span");
+      detailEl.className = "check-detail";
+      detailEl.textContent = detail;
+      checkRow.appendChild(icon);
+      checkRow.appendChild(labelEl);
+      checkRow.appendChild(detailEl);
+      container.appendChild(checkRow);
+    });
+
+    if (data.tips?.length) {
+      const tipsTitle = document.createElement("p");
+      tipsTitle.className = "form-hint";
+      tipsTitle.style.marginTop = "12px";
+      tipsTitle.style.fontWeight = "600";
+      tipsTitle.textContent = "How to fix:";
+      container.appendChild(tipsTitle);
+      data.tips.forEach(tip => {
+        const p = document.createElement("p");
+        p.className = "form-hint";
+        p.style.color = "var(--warning)";
+        p.textContent = "→ " + tip;
+        container.appendChild(p);
+      });
+    }
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "verify-action-row";
+
+    if (!dnsReady) {
+      const reverifyBtn = document.createElement("button");
+      reverifyBtn.type = "button";
+      reverifyBtn.className = "btn btn-sm btn-primary";
+      reverifyBtn.textContent = "Re-verify";
+      reverifyBtn.addEventListener("click", async () => {
+        reverifyBtn.disabled = true;
+        reverifyBtn.textContent = "Checking…";
+        await runHealthCheck(container, item, row);
+      });
+      btnRow.appendChild(reverifyBtn);
+    }
+
+    const dnsBtn = document.createElement("button");
+    dnsBtn.type = "button";
+    dnsBtn.className = "btn btn-sm btn-secondary";
+    dnsBtn.textContent = dnsReady ? "View DNS Records" : "Show DNS Records to Add";
+    dnsBtn.addEventListener("click", async () => {
+      dnsBtn.disabled = true;
+      dnsBtn.textContent = "Loading…";
+      try {
+        const res = await apiFetch(`/api/domains/${encodeURIComponent(item.domain)}/dns`);
+        const d   = await res.json();
+        if (!d.error) {
+          btnRow.remove();
+          renderDnsRecords(container, d.dns);
+        }
+      } catch { dnsBtn.disabled = false; dnsBtn.textContent = "Show DNS Records"; }
+    });
+    btnRow.appendChild(dnsBtn);
+
+    container.appendChild(btnRow);
+  }
+
+  async function deleteDomain(domain, hasKey) {
+    const msg = hasKey
+      ? `Delete domain "${domain}" and its private key file? This cannot be undone.`
+      : `Remove domain "${domain}" from config?`;
+    if (!confirm(msg)) return;
+    try {
+      const res  = await apiFetch("/api/domains/delete", "POST", { domain, deleteKey: hasKey });
+      const data = await res.json();
+      if (data.success) {
+        appendLog(`Domain ${domain} deleted`, "system");
+        loadSendingDomains();
+      } else {
+        alert("Delete failed: " + (data.error || "unknown error"));
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  }
 
   // ── Relay Manager ─────────────────────────────────────────────────────────
 
@@ -940,6 +1327,15 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
       if (settingsNav) settingsNav.click();
+    });
+  });
+
+  // Inline nav links (e.g. in wizard hints)
+  document.querySelectorAll(".nav-link-inline[data-tab]").forEach(el => {
+    el.addEventListener("click", e => {
+      e.preventDefault();
+      const nav = document.querySelector(`.nav-item[data-tab="${el.getAttribute("data-tab")}"]`);
+      if (nav) nav.click();
     });
   });
 
@@ -1281,7 +1677,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // JSON fields — pretty-print for editing
       try { document.getElementById("settings-rate-limits").value = JSON.stringify(data.rateLimits || {}, null, 2); } catch {}
-      try { document.getElementById("settings-dkim").value        = JSON.stringify(data.dkim       || {}, null, 2); } catch {}
 
       updatePublicUrlDisplay();
     } catch (e) {
@@ -1357,7 +1752,6 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     // JSON textarea fields — skip on parse error rather than blocking save
     try { payload.rateLimits = JSON.parse(document.getElementById("settings-rate-limits").value || "{}"); } catch {}
-    try { payload.dkim       = JSON.parse(document.getElementById("settings-dkim").value       || "{}"); } catch {}
 
     try {
       const res  = await apiFetch("/api/config", "POST", payload);

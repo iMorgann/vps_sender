@@ -19,7 +19,11 @@
       "Bash(node --check lib/net/proxy.js)",
       "Bash(coderabbit --version)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\" -File -Filter \"*.js\")",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\vps-sender.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\campaign\\\\engine.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\scanner\\\\sender-health.js\")",
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\web\\\\app.js\")"
     ]
   }
 }

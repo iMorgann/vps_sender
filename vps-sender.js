@@ -28,6 +28,19 @@ const { filterValid }    = require("./lib/hygiene/validator");
 const { cleanList }      = require("./lib/hygiene/deduplicator");
 const { exportCsv }      = require("./lib/campaign/state");
 
+// ── DNS record builder ────────────────────────────────────────────────────────
+function buildDnsRecords(domain, selector, pubDer, sendingIp) {
+  const ip = sendingIp || "";
+  return {
+    a_root: { name: domain,            type: "A",   value: ip || "<your-server-ip>" },
+    a_mail: { name: `mail.${domain}`,  type: "A",   value: ip || "<your-server-ip>" },
+    mx:     { name: domain,            type: "MX",  value: `10 mail.${domain}` },
+    spf:    { name: domain,            type: "TXT", value: ip ? `v=spf1 ip4:${ip} ~all` : "v=spf1 ~all" },
+    dkim:   { name: `${selector}._domainkey.${domain}`, type: "TXT", value: `v=DKIM1; k=rsa; p=${pubDer}` },
+    dmarc:  { name: `_dmarc.${domain}`,type: "TXT", value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}` },
+  };
+}
+
 // ── Persistent config ──────────────────────────────────────────────────────────
 const CONFIG_FILE = path.join(__dirname, "config.json");
 
@@ -308,8 +321,9 @@ function banner() {
   console.clear();
   console.log(`${C.bold}${C.cyan}`);
   console.log("  ╔══════════════════════════════════════════╗");
-  console.log("  ║   VPS Sender v2  —  Direct-to-MX        ║");
+  console.log("  ║        Zetta Sends  —  Zetta Inc        ║");
   console.log("  ║   DKIM · HELO · Rate-limit · Retry      ║");
+  console.log("  ║  zShell @firehol  ·  Root @irootbck     ║");
   console.log("  ╚══════════════════════════════════════════╝");
   console.log(C.reset);
 }
@@ -370,7 +384,7 @@ async function runScanner(cfg) {
   console.log(`\n  Scanning ${b(domains.length)} sender domain(s)…\n`);
   let done = 0;
   const results = [];
-  await scanDomains(domains, PROXY, 8, (d, t, info) => {
+  await scanDomains(domains, PROXY, 8, (_d, _t, info) => {
     info.emails = domainMap[info.domain] || [];
     results.push(info);
     done++;
@@ -563,7 +577,6 @@ async function runSender(smtpEntries, cfg) {
   process.once("SIGTERM", () => { token.cancelled = true; });
   process.once("SIGINT",  () => { token.cancelled = true; });
 
-  const sendStart = Date.now();
   const stats = await runCampaign({
     smtpEntries,
     fromNames,
@@ -874,6 +887,9 @@ async function startWebServer() {
             delete body.dkim;
           }
         }
+        if (body.proxyUrl !== undefined) {
+          body.proxyUrl = String(body.proxyUrl).replace(/[\r\n]/g, "").trim();
+        }
         saveConfig(body);
         if (body.proxyUrl !== undefined) PROXY = body.proxyUrl ? parseProxyUrl(body.proxyUrl) : null;
         if (body.bindHost === "0.0.0.0" && !getCachedConfig().apiToken) {
@@ -1095,8 +1111,9 @@ async function startWebServer() {
         if (body.attachmentFiles !== undefined) {
           safe.attachmentFiles = (Array.isArray(body.attachmentFiles) ? body.attachmentFiles : []).map(safeFilePath).filter(Boolean);
         }
-        if (body.rotEvery !== undefined) safe.rotEvery = parseInt(body.rotEvery, 10) || 2;
-        if (body.resume   !== undefined) safe.resume   = !!body.resume;
+        if (body.rotEvery        !== undefined) safe.rotEvery        = parseInt(body.rotEvery, 10) || 2;
+        if (body.resume          !== undefined) safe.resume          = !!body.resume;
+        if (body.domainRotation  !== undefined) safe.domainRotation  = !!body.domainRotation;
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1132,10 +1149,13 @@ async function startWebServer() {
       }
 
       if (req.method === "POST" && pathname === "/api/campaign/resume") {
-        if (engineState.status === "paused") {
-          campaignCancelToken.paused = false;
-          updateEngineStatus("sending");
+        if (engineState.status !== "paused") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not paused" }));
+          return;
         }
+        campaignCancelToken.paused = false;
+        updateEngineStatus("sending");
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -1153,7 +1173,7 @@ async function startWebServer() {
       if (req.method === "POST" && pathname === "/api/dkim/generate") {
         const body     = await getJsonBody();
         const domain   = String(body.domain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
-        if (!domain || !/^[a-z0-9][a-z0-9\-.]+\.[a-z]{2,}$/.test(domain)) {
+        if (!domain || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(domain)) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Invalid domain" }));
           return;
@@ -1181,12 +1201,77 @@ async function startWebServer() {
           domain,
           selector,
           publicKey: pubDer,
-          dns: {
-            spf:   { name: domain,                          type: "TXT", value: sendingIp ? `v=spf1 ip4:${sendingIp} ~all` : "v=spf1 ~all" },
-            dkim:  { name: `${selector}._domainkey.${domain}`, type: "TXT", value: `v=DKIM1; k=rsa; p=${pubDer}` },
-            dmarc: { name: `_dmarc.${domain}`,              type: "TXT", value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}` },
-          },
+          dns: buildDnsRecords(domain, selector, pubDer, sendingIp),
           os: process.platform,
+        }));
+        return;
+      }
+
+      // ── Domain management ────────────────────────────────────────────────
+      if (req.method === "GET" && pathname === "/api/domains") {
+        const cfg  = getCachedConfig();
+        const dkim = cfg.dkim || {};
+        const list = Object.entries(dkim).map(([domain, d]) => ({
+          domain,
+          selector: d.keySelector || "mail",
+          keyFile:  d.privateKeyPath || `dkim/${domain}.pem`,
+          hasKey:   fs.existsSync(path.join(__dirname, d.privateKeyPath || `dkim/${domain}.pem`)),
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(list));
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/domains/delete") {
+        const body   = await getJsonBody();
+        const domain = String(body.domain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
+        if (!domain) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing domain" }));
+          return;
+        }
+        const cfg  = loadConfig();
+        const dkim = { ...(cfg.dkim || {}) };
+        const entry = dkim[domain];
+        if (entry && body.deleteKey) {
+          const keyPath = path.join(__dirname, entry.privateKeyPath || `dkim/${domain}.pem`);
+          if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath);
+        }
+        delete dkim[domain];
+        saveConfig({ dkim });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      const domainDnsMatch = pathname.match(/^\/api\/domains\/([^/]+)\/dns$/);
+      if (req.method === "GET" && domainDnsMatch) {
+        const domain = decodeURIComponent(domainDnsMatch[1]).toLowerCase();
+        const cfg    = getCachedConfig();
+        const entry  = (cfg.dkim || {})[domain];
+        if (!entry) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Domain not found" }));
+          return;
+        }
+        const keyPath = path.join(__dirname, entry.privateKeyPath || `dkim/${domain}.pem`);
+        if (!fs.existsSync(keyPath)) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Key file not found" }));
+          return;
+        }
+        const privPem  = fs.readFileSync(keyPath, "utf8");
+        const privKey  = crypto.createPrivateKey(privPem);
+        const pubKey   = crypto.createPublicKey(privKey);
+        const pubDer   = pubKey.export({ type: "spki", format: "der" }).toString("base64").replace(/\n/g, "");
+        const selector = entry.keySelector || "mail";
+        let sendingIp  = "";
+        try { sendingIp = await detectSendingIp(); } catch { /* ignore */ }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          domain,
+          selector,
+          dns: buildDnsRecords(domain, selector, pubDer, sendingIp),
         }));
         return;
       }
@@ -1224,7 +1309,7 @@ async function startWebServer() {
           mta.active   = svc === "active";
           mta.details  = { service: svc, inet_interfaces: iface, mynetworks: nets, port25_listeners: port25 || "(none)" };
           if (!mta.active) mta.issues.push("Postfix is not running. Fix: sudo systemctl start postfix && sudo systemctl enable postfix");
-          if (iface !== "unknown" && !iface.includes("loopback") && iface !== "127.0.0.1")
+          if (iface !== "unknown" && !iface.includes("loopback") && !iface.includes("127.0.0.1"))
             mta.warnings.push(`inet_interfaces = "${iface}" — expected "loopback-only" to restrict to localhost`);
           if (nets !== "unknown" && !nets.includes("127.0.0.0") && !nets.includes("127.0.0.1"))
             mta.warnings.push(`mynetworks = "${nets}" — 127.0.0.0/8 should be included to trust loopback relay`);
@@ -1315,6 +1400,7 @@ let webCampaignConfig = {
   smtpFile:       "smtp.txt",
   rotEvery:       2,
   resume:         true,
+  domainRotation: false,
 };
 
 async function runWebScanner(emails, includeWeak, outputFile) {
@@ -1329,7 +1415,7 @@ async function runWebScanner(emails, includeWeak, outputFile) {
   broadcastSSE({ type: "log", text: `Scanning ${domains.length} domains…`, logClass: "system" });
 
   const results = [];
-  await scanDomains(domains, PROXY, 8, (done, total, info) => {
+  await scanDomains(domains, PROXY, 8, (_done, _total, info) => {
     info.emails = domainMap[info.domain] || [];
     results.push(info);
     broadcastSSE({ type: "scan_progress", results, done: false });
@@ -1403,6 +1489,21 @@ async function runWebCampaign() {
     ? `web-${webCampaignConfig.recipientsFile}-${webCampaignConfig.smtpFile}`.replace(/[^a-z0-9._-]/gi, "_")
     : `web-${Date.now()}`;
 
+  // Build domain rotation pool from configured DKIM entries that have key files on disk
+  const domainPool = webCampaignConfig.domainRotation
+    ? Object.entries(cfg.dkim || {})
+        .filter(([domain, d]) => fs.existsSync(path.join(__dirname, d.privateKeyPath || `dkim/${domain}.pem`)))
+        .map(([domain]) => domain)
+    : [];
+
+  if (webCampaignConfig.domainRotation) {
+    if (domainPool.length === 0) {
+      broadcastSSE({ type: "log", text: "Domain rotation is enabled but no configured domains have key files. Add domains in the Sending Domains tab.", logClass: "warn" });
+    } else {
+      broadcastSSE({ type: "log", text: `Domain rotation: using ${domainPool.length} domain(s): ${domainPool.join(", ")}`, logClass: "system" });
+    }
+  }
+
   const stats = await runCampaign({
     smtpEntries,
     fromNames,
@@ -1410,6 +1511,7 @@ async function runWebCampaign() {
     htmlBodies,
     attachments,
     allEmails,
+    domainPool,
     config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,

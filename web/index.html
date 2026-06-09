@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VPS Sender</title>
+  <title>Zetta Sends</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
@@ -19,8 +19,8 @@
       <div class="logo-area">
         <div class="logo-icon">🚀</div>
         <div class="logo-text">
-          <h2>VPS Sender</h2>
-          <span>Mail Delivery Engine</span>
+          <h2>Zetta Sends</h2>
+          <span>by Zetta Inc</span>
         </div>
       </div>
       <nav class="nav-menu">
@@ -39,6 +39,9 @@
         <a href="#" class="nav-item" data-tab="previewer">
           <span class="icon">👁️</span> Mail Previewer
         </a>
+        <a href="#" class="nav-item" data-tab="sending-domains">
+          <span class="icon">📧</span> Sending Domains
+        </a>
         <a href="#" class="nav-item" data-tab="relay-manager">
           <span class="icon">🔌</span> Relay Manager
         </a>
@@ -48,6 +51,10 @@
       </nav>
       <div class="engine-status-badge idle" id="engine-status">
         <span class="pulse"></span> <span id="engine-status-text">Engine: Idle</span>
+      </div>
+      <div class="sidebar-credits">
+        <span>zShell <a href="https://t.me/firehol" target="_blank" rel="noopener">@firehol</a></span>
+        <span>Root <a href="https://t.me/irootbck" target="_blank" rel="noopener">@irootbck</a></span>
       </div>
     </aside>
 
@@ -241,6 +248,14 @@
               </div>
             </div>
 
+            <div class="form-group domain-rotation-group">
+              <div class="checkbox-wrapper">
+                <input type="checkbox" id="wizard-domain-rotation">
+                <label for="wizard-domain-rotation" class="checkbox-label">🔀 Rotate sending domains (randomize From: domain per email)</label>
+              </div>
+              <small class="form-hint" id="domain-rotation-hint">Uses all configured domains from the <a href="#" class="nav-link-inline" data-tab="sending-domains">Sending Domains</a> tab. The local part of the From address stays the same; only the domain rotates. Requires DKIM keys to be generated for each domain.</small>
+            </div>
+
             <div class="form-actions">
               <button type="submit" class="btn btn-primary btn-glow">Apply to Campaign Dashboard</button>
             </div>
@@ -402,6 +417,48 @@
         </div>
       </section>
 
+      <!-- Tab Content: Sending Domains -->
+      <section class="tab-content" id="tab-sending-domains">
+        <div class="panel">
+          <div class="domains-header">
+            <div>
+              <h2>Sending Domains</h2>
+              <p class="section-desc">Manage DKIM keys and verify DNS records for your sending domains.</p>
+            </div>
+            <div class="domains-header-actions">
+              <button type="button" id="btn-add-domain-toggle" class="btn btn-primary btn-glow">+ Add Domain</button>
+              <button type="button" id="btn-refresh-domains" class="btn btn-secondary">Refresh</button>
+            </div>
+          </div>
+
+          <!-- Add domain form (hidden by default) -->
+          <div id="add-domain-form" class="add-domain-form" style="display:none">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="new-domain-name">Domain</label>
+                <input type="text" id="new-domain-name" class="form-control" placeholder="mail.yourdomain.com">
+              </div>
+              <div class="form-group">
+                <label for="new-domain-selector">Selector</label>
+                <input type="text" id="new-domain-selector" class="form-control" value="mail">
+              </div>
+            </div>
+            <div class="add-domain-actions">
+              <button type="button" id="btn-generate-domain-keys" class="btn btn-primary">Generate Keys</button>
+              <button type="button" id="btn-cancel-add-domain" class="btn btn-secondary">Cancel</button>
+            </div>
+            <div id="add-domain-error" class="error-msg" style="display:none"></div>
+          </div>
+
+          <!-- Domain list -->
+          <div id="domain-list" class="domain-list">
+            <div class="domain-list-empty" id="domain-list-empty">
+              No domains configured. Click "Add Domain" to generate DKIM keys for your first sending domain.
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Tab Content: Relay Manager -->
       <section class="tab-content" id="tab-relay-manager">
         <div class="relay-manager-wrap">
@@ -496,257 +553,239 @@
       <section class="tab-content" id="tab-settings">
         <div class="panel max-w-600">
           <h2>System Configuration</h2>
-          <p class="section-desc">Modify system paths, delay parameters, and SOCKS5 proxy settings.</p>
+          <p class="section-desc">Configure delivery, transport, and server options.</p>
+
+          <!-- Settings sub-tab pills -->
+          <div class="settings-subtabs">
+            <button type="button" class="settings-subtab-btn active" data-stab="general">General</button>
+            <button type="button" class="settings-subtab-btn" data-stab="transport">Transport &amp; Relay</button>
+            <button type="button" class="settings-subtab-btn" data-stab="advanced">Advanced</button>
+          </div>
 
           <form id="settings-form" class="form-container">
-            <div class="form-group">
-              <label for="settings-proxy">SOCKS5 Proxy URL</label>
-              <div class="proxy-input-group">
-                <input type="text" id="settings-proxy" class="form-control" placeholder="socks5://user:pass@host:port (or leave blank)">
-                <button type="button" id="btn-test-proxy" class="btn btn-secondary">Test Connection</button>
+
+            <!-- ── General ────────────────────────────────────────────── -->
+            <div class="settings-tab-panel active" data-stab="general">
+
+              <h3 class="form-section-title">Server Access</h3>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="settings-bind-host">Bind Address</label>
+                  <select id="settings-bind-host" class="form-control">
+                    <option value="127.0.0.1">127.0.0.1 — localhost only (safe default)</option>
+                    <option value="0.0.0.0">0.0.0.0 — public network (set API token!)</option>
+                  </select>
+                  <small class="form-hint">Restart the server after changing this</small>
+                </div>
+                <div class="form-group">
+                  <label for="settings-port">Port</label>
+                  <input type="number" id="settings-port" class="form-control" value="3000" min="1024" max="65535">
+                  <small class="form-hint">TCP port the web GUI listens on</small>
+                </div>
               </div>
-              <small class="form-hint" id="proxy-test-status">No proxy configured or tested yet.</small>
-            </div>
 
-            <div class="form-group">
-              <label for="settings-delay">Send Delay (milliseconds)</label>
-              <input type="number" id="settings-delay" class="form-control" value="1200" min="0">
-              <small class="form-hint">Delay between consecutive email sends</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-greylist">Greylist Retry Timeout (milliseconds)</label>
-              <input type="number" id="settings-greylist" class="form-control" value="60000" min="5000">
-              <small class="form-hint">Time to wait before retrying a greylisted (4xx) email</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-results-file">Campaign Results File</label>
-              <input type="text" id="settings-results-file" class="form-control" value="results.csv">
-              <small class="form-hint">Destination CSV file to log sending status</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-helo-host">EHLO/HELO Hostname</label>
-              <input type="text" id="settings-helo-host" class="form-control" placeholder="mail.yourdomain.com">
-              <small class="form-hint">Hostname presented in SMTP EHLO command</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-concurrency">Concurrency (1–5)</label>
-              <input type="number" id="settings-concurrency" class="form-control" value="2" min="1" max="5">
-              <small class="form-hint">Number of simultaneous outbound SMTP connections</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-unsubscribe">Unsubscribe Base URL</label>
-              <input type="text" id="settings-unsubscribe" class="form-control" placeholder="https://yourdomain.com/unsub">
-              <small class="form-hint">Base URL for List-Unsubscribe header (leave blank to omit)</small>
-            </div>
-
-            <div class="form-group">
-              <label>
-                <input type="checkbox" id="settings-tls-reject"> Reject invalid TLS certificates
-              </label>
-              <small class="form-hint">Uncheck to allow self-signed certs on receiving MTAs</small>
-            </div>
-
-            <hr class="form-divider">
-            <h3 class="form-section-title">Server Access</h3>
-
-            <div class="form-row">
               <div class="form-group">
-                <label for="settings-bind-host">Bind Address</label>
-                <select id="settings-bind-host" class="form-control">
-                  <option value="127.0.0.1">127.0.0.1 — localhost only (safe default)</option>
-                  <option value="0.0.0.0">0.0.0.0 — public network (set API token!)</option>
+                <label for="settings-domain">Custom Domain (optional)</label>
+                <input type="text" id="settings-domain" class="form-control" placeholder="mail.yourdomain.com">
+                <small class="form-hint">Used for CORS and the public URL display below</small>
+              </div>
+
+              <div class="form-group">
+                <label for="settings-api-token">API Token</label>
+                <input type="text" id="settings-api-token" class="form-control" placeholder="Leave blank to clear; type to set">
+                <small class="form-hint">Required for public access. Sent via X-API-Token header or ?token= query.</small>
+              </div>
+
+              <div class="warning-badge" id="public-no-token-warning" style="display:none">
+                ⚠ You have enabled public binding (0.0.0.0) without an API token.
+                Anyone on the internet can access and control this server.
+              </div>
+
+              <div class="form-group" id="public-url-group" style="display:none">
+                <label>Public URL</label>
+                <div class="public-url-display">
+                  <span id="public-url-text" class="text-glow"></span>
+                  <button type="button" class="btn btn-sm btn-secondary" id="btn-copy-url">Copy</button>
+                </div>
+              </div>
+
+              <hr class="form-divider">
+              <h3 class="form-section-title">Delivery</h3>
+
+              <div class="form-group">
+                <label for="settings-proxy">SOCKS5 Proxy URL</label>
+                <div class="proxy-input-group">
+                  <input type="text" id="settings-proxy" class="form-control" placeholder="socks5://user:pass@host:port (or leave blank)">
+                  <button type="button" id="btn-test-proxy" class="btn btn-secondary">Test</button>
+                </div>
+                <small class="form-hint" id="proxy-test-status">No proxy configured or tested yet.</small>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="settings-delay">Send Delay (ms)</label>
+                  <input type="number" id="settings-delay" class="form-control" value="1200" min="0">
+                  <small class="form-hint">Delay between sends</small>
+                </div>
+                <div class="form-group">
+                  <label for="settings-greylist">Greylist Retry (ms)</label>
+                  <input type="number" id="settings-greylist" class="form-control" value="60000" min="5000">
+                  <small class="form-hint">Wait before retrying 4xx</small>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="settings-results-file">Results File</label>
+                  <input type="text" id="settings-results-file" class="form-control" value="results.csv">
+                  <small class="form-hint">Campaign log CSV path</small>
+                </div>
+                <div class="form-group">
+                  <label for="settings-concurrency">Concurrency (1–5)</label>
+                  <input type="number" id="settings-concurrency" class="form-control" value="2" min="1" max="5">
+                  <small class="form-hint">Simultaneous SMTP connections</small>
+                </div>
+              </div>
+
+              <hr class="form-divider">
+              <h3 class="form-section-title">SMTP</h3>
+
+              <div class="form-group">
+                <label for="settings-helo-host">EHLO/HELO Hostname</label>
+                <input type="text" id="settings-helo-host" class="form-control" placeholder="mail.yourdomain.com">
+                <small class="form-hint">Hostname presented in SMTP EHLO command</small>
+              </div>
+
+              <div class="form-group">
+                <label for="settings-unsubscribe">Unsubscribe Base URL</label>
+                <input type="text" id="settings-unsubscribe" class="form-control" placeholder="https://yourdomain.com/unsub">
+                <small class="form-hint">Base URL for List-Unsubscribe header (leave blank to omit)</small>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="settings-tls-reject"> Reject invalid TLS
+                  </label>
+                  <small class="form-hint">Disallow self-signed certs</small>
+                </div>
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="settings-allow-weak"> Allow weak domains
+                  </label>
+                  <small class="form-hint">Ignore SPF/DMARC strength</small>
+                </div>
+              </div>
+
+            </div><!-- /general -->
+
+            <!-- ── Transport & Relay ──────────────────────────────────── -->
+            <div class="settings-tab-panel" data-stab="transport">
+
+              <h3 class="form-section-title">Delivery Mode</h3>
+
+              <div class="form-group">
+                <label for="settings-transport">Transport</label>
+                <select id="settings-transport" class="form-control">
+                  <option value="direct">Direct to MX — resolve &amp; connect directly (no relay)</option>
+                  <option value="relay">Local MTA Relay — route via hMailServer / Postfix</option>
                 </select>
-                <small class="form-hint">Restart the server after changing this</small>
+                <small class="form-hint">Direct mode needs port 25 open. Relay mode needs a local MTA on port 587.</small>
               </div>
-              <div class="form-group">
-                <label for="settings-port">Port</label>
-                <input type="number" id="settings-port" class="form-control" value="3000" min="1024" max="65535">
-                <small class="form-hint">TCP port the web GUI listens on</small>
-              </div>
-            </div>
 
-            <div class="form-group">
-              <label for="settings-domain">Custom Domain (optional)</label>
-              <input type="text" id="settings-domain" class="form-control" placeholder="mail.yourdomain.com">
-              <small class="form-hint">Used for CORS and the public URL display below</small>
-            </div>
-
-            <div class="form-group">
-              <label for="settings-api-token">API Token</label>
-              <input type="text" id="settings-api-token" class="form-control" placeholder="Leave blank to clear; type to set">
-              <small class="form-hint">Required for public access. Sent via X-API-Token header or ?token= query.</small>
-            </div>
-
-            <div class="warning-badge" id="public-no-token-warning" style="display:none">
-              ⚠ You have enabled public binding (0.0.0.0) without an API token.
-              Anyone on the internet can access and control this server.
-            </div>
-
-            <div class="form-group" id="public-url-group" style="display:none">
-              <label>Public URL</label>
-              <div class="public-url-display">
-                <span id="public-url-text" class="text-glow"></span>
-                <button type="button" class="btn btn-sm btn-secondary" id="btn-copy-url">Copy</button>
-              </div>
-            </div>
-
-            <hr class="form-divider">
-            <h3 class="form-section-title">Sending Options</h3>
-
-            <div class="form-group">
-              <label for="settings-sending-ip">Sending IP</label>
-              <input type="text" id="settings-sending-ip" class="form-control" placeholder="auto">
-              <small class="form-hint">Source IP for outbound SMTP connections. Leave "auto" to detect from interface.</small>
-            </div>
-
-            <div class="form-row">
               <div class="form-group">
                 <label>
                   <input type="checkbox" id="settings-direct-mx"> Direct-to-MX only
                 </label>
-                <small class="form-hint">Always resolve MX and connect directly (skip relay)</small>
+                <small class="form-hint">Always resolve MX and connect directly, ignoring transport setting</small>
               </div>
+
+              <div class="relay-fields hidden" id="relay-fields">
+                <hr class="form-divider">
+                <h3 class="form-section-title">Relay Configuration</h3>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="settings-relay-host">Relay Host</label>
+                    <input type="text" id="settings-relay-host" class="form-control" value="127.0.0.1">
+                  </div>
+                  <div class="form-group">
+                    <label for="settings-relay-port">Relay Port</label>
+                    <input type="number" id="settings-relay-port" class="form-control" value="587" min="1" max="65535">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="settings-relay-user">Username</label>
+                    <input type="text" id="settings-relay-user" class="form-control" placeholder="(leave blank if no auth)">
+                  </div>
+                  <div class="form-group">
+                    <label for="settings-relay-pass">Password</label>
+                    <input type="password" id="settings-relay-pass" class="form-control" placeholder="(leave blank if no auth)">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="settings-prescan-relay" checked> Pre-scan recipient domains in relay mode
+                  </label>
+                  <small class="form-hint">Uncheck to skip MX port-25 pre-flight — useful when the relay handles routing</small>
+                </div>
+              </div>
+
+              <hr class="form-divider">
+              <h3 class="form-section-title">Envelope</h3>
+
+              <div class="form-group">
+                <label for="settings-sending-ip">Sending IP</label>
+                <input type="text" id="settings-sending-ip" class="form-control" placeholder="auto">
+                <small class="form-hint">Source IP for outbound SMTP. Leave "auto" to use default interface.</small>
+              </div>
+
+              <div class="form-group">
+                <label for="settings-envelope-domain">Envelope Domain (split-header signing)</label>
+                <input type="text" id="settings-envelope-domain" class="form-control" placeholder="yourdomain.com (leave blank to use sender domain)">
+                <small class="form-hint">MAIL FROM uses bounce@this-domain for SPF/DKIM alignment. Header From: stays as the visible address.</small>
+              </div>
+
+            </div><!-- /transport -->
+
+            <!-- ── Advanced ───────────────────────────────────────────── -->
+            <div class="settings-tab-panel" data-stab="advanced">
+
+              <h3 class="form-section-title">Send Warmup</h3>
+
               <div class="form-group">
                 <label>
-                  <input type="checkbox" id="settings-allow-weak"> Allow weak domains
+                  <input type="checkbox" id="settings-warmup-enabled"> Enable warmup mode
                 </label>
-                <small class="form-hint">Send from domains regardless of SPF/DMARC strength</small>
+                <small class="form-hint">Gradually increase daily send volume to build sender reputation</small>
               </div>
-            </div>
 
-            <hr class="form-divider">
-            <h3 class="form-section-title">Send Warmup</h3>
-
-            <div class="form-group">
-              <label>
-                <input type="checkbox" id="settings-warmup-enabled"> Enable warmup mode
-              </label>
-              <small class="form-hint">Gradually increase daily send volume to build sender reputation</small>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="settings-warmup-daily">Daily Limit</label>
-                <input type="number" id="settings-warmup-daily" class="form-control" value="100" min="1">
-                <small class="form-hint">Max emails per day during warmup</small>
-              </div>
-              <div class="form-group">
-                <label for="settings-warmup-increment">Daily Increment</label>
-                <input type="number" id="settings-warmup-increment" class="form-control" value="50" min="1">
-                <small class="form-hint">Increase the daily limit by this amount each day</small>
-              </div>
-            </div>
-
-            <hr class="form-divider">
-            <h3 class="form-section-title">Transport Mode</h3>
-
-            <div class="form-group">
-              <label for="settings-transport">Delivery Mode</label>
-              <select id="settings-transport" class="form-control">
-                <option value="direct">Direct to MX — resolve &amp; connect directly (no relay)</option>
-                <option value="relay">Local MTA Relay — route via hMailServer / Postfix</option>
-              </select>
-              <small class="form-hint">Direct mode needs port 25 open. Relay mode needs a local MTA configured on port 587.</small>
-            </div>
-
-            <div class="relay-fields hidden" id="relay-fields">
               <div class="form-row">
                 <div class="form-group">
-                  <label for="settings-relay-host">Relay Host</label>
-                  <input type="text" id="settings-relay-host" class="form-control" value="127.0.0.1">
+                  <label for="settings-warmup-daily">Daily Limit</label>
+                  <input type="number" id="settings-warmup-daily" class="form-control" value="100" min="1">
+                  <small class="form-hint">Max emails per day during warmup</small>
                 </div>
                 <div class="form-group">
-                  <label for="settings-relay-port">Relay Port</label>
-                  <input type="number" id="settings-relay-port" class="form-control" value="587" min="1" max="65535">
+                  <label for="settings-warmup-increment">Daily Increment</label>
+                  <input type="number" id="settings-warmup-increment" class="form-control" value="50" min="1">
+                  <small class="form-hint">Increase limit by this amount each day</small>
                 </div>
               </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="settings-relay-user">Relay Username</label>
-                  <input type="text" id="settings-relay-user" class="form-control" placeholder="(leave blank if no auth)">
-                </div>
-                <div class="form-group">
-                  <label for="settings-relay-pass">Relay Password</label>
-                  <input type="password" id="settings-relay-pass" class="form-control" placeholder="(leave blank if no auth)">
-                </div>
-              </div>
+
+              <hr class="form-divider">
+              <h3 class="form-section-title">Rate Limits</h3>
+
               <div class="form-group">
-                <label>
-                  <input type="checkbox" id="settings-prescan-relay" checked> Pre-scan recipient domains in relay mode
-                </label>
-                <small class="form-hint">Uncheck to skip MX port-25 pre-flight for relay mode — useful when the relay handles routing</small>
+                <label for="settings-rate-limits">Per-provider rate limits (JSON)</label>
+                <textarea id="settings-rate-limits" class="form-control code-editor" rows="7" style="resize:vertical;min-height:120px"></textarea>
+                <small class="form-hint">Per-minute and per-hour caps keyed by provider domain. Invalid JSON is ignored on save.</small>
               </div>
-            </div>
 
-            <div class="form-group">
-              <label for="settings-envelope-domain">Envelope Domain (split-header signing)</label>
-              <input type="text" id="settings-envelope-domain" class="form-control" placeholder="yourdomain.com (leave blank to use sender domain)">
-              <small class="form-hint">MAIL FROM uses bounce@this-domain for SPF/DKIM alignment. Header From: stays as the visible address.</small>
-            </div>
+            </div><!-- /advanced -->
 
-            <hr class="form-divider">
-            <h3 class="form-section-title">DKIM Key Generation</h3>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="settings-dkim-domain">Domain</label>
-                <input type="text" id="settings-dkim-domain" class="form-control" placeholder="yourdomain.com">
-              </div>
-              <div class="form-group">
-                <label for="settings-dkim-selector">Selector</label>
-                <input type="text" id="settings-dkim-selector" class="form-control" value="mail">
-              </div>
-            </div>
-
-            <button type="button" id="btn-generate-dkim" class="btn btn-secondary">Generate DKIM Keys</button>
-            <small class="form-hint" style="margin-top:6px;display:block">Generates an RSA-2048 key pair, saves the private key to dkim/&lt;domain&gt;.pem, and updates config.dkim automatically.</small>
-
-            <div id="dkim-result" style="display:none;margin-top:16px">
-              <p class="form-hint" style="margin-bottom:8px">Add these DNS TXT records to your domain:</p>
-              <div class="dns-record-block" id="dns-spf-block">
-                <div class="dns-record-label">SPF</div>
-                <div class="dns-record-name" id="dns-spf-name"></div>
-                <div id="dns-spf-value"></div>
-              </div>
-              <div class="dns-record-block" id="dns-dkim-block">
-                <div class="dns-record-label">DKIM</div>
-                <div class="dns-record-name" id="dns-dkim-name"></div>
-                <div id="dns-dkim-value" style="word-break:break-all"></div>
-              </div>
-              <div class="dns-record-block" id="dns-dmarc-block">
-                <div class="dns-record-label">DMARC</div>
-                <div class="dns-record-name" id="dns-dmarc-name"></div>
-                <div id="dns-dmarc-value"></div>
-              </div>
-              <div id="dkim-mta-instructions" style="margin-top:12px"></div>
-            </div>
-
-            <hr class="form-divider">
-            <h3 class="form-section-title">Rate Limits</h3>
-
-            <div class="form-group">
-              <label for="settings-rate-limits">Per-provider rate limits (JSON)</label>
-              <textarea id="settings-rate-limits" class="form-control code-editor" rows="7" style="resize:vertical;min-height:120px"></textarea>
-              <small class="form-hint">Per-minute and per-hour caps keyed by provider domain. Invalid JSON is ignored on save.</small>
-            </div>
-
-            <hr class="form-divider">
-            <h3 class="form-section-title">DKIM Configuration</h3>
-
-            <div class="form-group">
-              <label for="settings-dkim">DKIM config (JSON)</label>
-              <textarea id="settings-dkim" class="form-control code-editor" rows="7"
-                style="resize:vertical;min-height:120px"
-                placeholder='{"yourdomain.com":{"domainName":"yourdomain.com","keySelector":"mail","privateKeyPath":"./dkim/yourdomain.com/private.pem"}}'></textarea>
-              <small class="form-hint">Generate keys: <code>npm run generate-dkim</code>. Invalid JSON is ignored on save.</small>
-            </div>
-
-            <button type="submit" class="btn btn-primary btn-glow">Save Configuration</button>
+            <button type="submit" class="btn btn-primary btn-glow" style="margin-top:8px">Save Configuration</button>
           </form>
         </div>
       </section>
