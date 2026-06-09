@@ -1128,7 +1128,7 @@ document.addEventListener("DOMContentLoaded", () => {
       typeLbl.textContent = "Type:";
       const typeVal = document.createElement("code");
       typeVal.className = "dns-copy-val";
-      typeVal.textContent = "TXT";
+      typeVal.textContent = rec.type;
       typeRow.appendChild(typeLbl);
       typeRow.appendChild(typeVal);
 
@@ -1158,13 +1158,46 @@ document.addEventListener("DOMContentLoaded", () => {
     container.appendChild(ptrNote);
   }
 
+  function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    // HTTP fallback via execCommand
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    return Promise.resolve();
+  }
+
+  function appendCheckRow(container, { label, ok, detail }) {
+    const checkRow = document.createElement("div");
+    checkRow.className = "health-check-item " + (ok ? "check-ok" : "check-warn");
+    const icon = document.createElement("span");
+    icon.className = "check-icon";
+    icon.textContent = ok ? "✓" : "⚠";
+    const labelEl = document.createElement("span");
+    labelEl.className = "check-label";
+    labelEl.textContent = label + ":";
+    const detailEl = document.createElement("span");
+    detailEl.className = "check-detail";
+    detailEl.textContent = detail;
+    checkRow.appendChild(icon);
+    checkRow.appendChild(labelEl);
+    checkRow.appendChild(detailEl);
+    container.appendChild(checkRow);
+  }
+
   function makeCopyBtn(text) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-sm btn-secondary dns-copy-btn";
     btn.textContent = "Copy";
     btn.addEventListener("click", () => {
-      navigator.clipboard.writeText(text).then(() => {
+      copyToClipboard(text).then(() => {
         btn.textContent = "Copied!";
         setTimeout(() => { btn.textContent = "Copy"; }, 1500);
       });
@@ -1182,14 +1215,10 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const aRootOk  = !!data.aRoot?.hasRecord;
-    const aMailOk  = !!data.aMail?.hasRecord;
-    const mxOk     = !!data.mx?.hasRecord;
-    const spfOk    = data.spf?.strength  !== "none";
-    const dkimOk   = !!data.dkim?.exists;
-    const dmarcOk  = !!data.dmarc?.raw;
-    const ptrOk    = !!data.ptr?.matches;
-    const dnsReady = aRootOk && aMailOk && mxOk && spfOk && dkimOk && dmarcOk; // PTR is advisory
+    // Critical = SPF + DKIM only. Advisory = everything else.
+    const spfOk   = data.spf?.strength !== "none";
+    const dkimOk  = !!data.dkim?.exists;
+    const dnsReady = spfOk && dkimOk;
 
     // Top-level READY / NOT READY banner
     const banner = document.createElement("div");
@@ -1199,8 +1228,8 @@ document.addEventListener("DOMContentLoaded", () => {
     bannerIcon.textContent = dnsReady ? "✅" : "❌";
     const bannerText = document.createElement("span");
     bannerText.textContent = dnsReady
-      ? "Ready to Send — all DNS records are configured correctly"
-      : "Not Ready — fix the issues below before sending";
+      ? "Ready to Send — critical DNS records (SPF + DKIM) are configured"
+      : "Not Ready — fix the critical issues below before sending";
     banner.appendChild(bannerIcon);
     banner.appendChild(bannerText);
     container.appendChild(banner);
@@ -1218,34 +1247,39 @@ document.addEventListener("DOMContentLoaded", () => {
       statusBadge.textContent = dnsReady ? "✅ Ready" : "❌ Not Ready";
     }
 
-    const ip = data.sendingIp || "";
-    const checks = [
-      { label: "A record (root)",  ok: aRootOk,  detail: aRootOk  ? `✓ ${data.aRoot.addrs.join(", ")}` : `No A record for ${item.domain} — add A → ${ip || "<server-ip>"}` },
-      { label: "A record (mail.)", ok: aMailOk,  detail: aMailOk  ? `✓ ${data.aMail.addrs.join(", ")}` : `No A record for mail.${item.domain} — add A → ${ip || "<server-ip>"}` },
-      { label: "MX record",        ok: mxOk,     detail: mxOk     ? `✓ ${data.mx.host}` : `No MX record for ${item.domain} — add MX 10 mail.${item.domain}` },
-      { label: "SPF",              ok: spfOk,    detail: data.spf?.raw   || `No SPF TXT record — add: v=spf1 ip4:${ip || "<ip>"} ~all` },
-      { label: "DKIM",             ok: dkimOk,   detail: dkimOk   ? `✓ Found at ${item.selector}._domainkey.${item.domain}` : `No DKIM TXT record at ${item.selector}._domainkey.${item.domain}` },
-      { label: "DMARC",            ok: dmarcOk,  detail: data.dmarc?.raw || `No DMARC TXT record — add v=DMARC1; p=none at _dmarc.${item.domain}` },
-      { label: "PTR/rDNS",         ok: ptrOk,    detail: data.ptr?.ptr ? (ptrOk ? `✓ ${data.ptr.ptr} (forward-confirmed)` : `${data.ptr.ptr} — does not resolve back to ${ip} (FCrDNS mismatch)`) : "No PTR — contact your VPS host to set reverse DNS" },
+    const ip       = data.sendingIp || "";
+    const dmarcOk  = !!data.dmarc?.raw;
+    const dmarcSrc = data.dmarcSource ? ` (at _dmarc.${data.dmarcSource})` : "";
+    const aRootOk  = !!data.aRoot?.hasRecord;
+    const aMailOk  = !!data.aMail?.hasRecord;
+    const mxOk     = !!data.mx?.hasRecord;
+    const ptrOk    = !!data.ptr?.ptr; // advisory: just having a PTR is enough
+
+    // Critical checks first, then advisory
+    const criticalChecks = [
+      { label: "SPF",  ok: spfOk,  detail: data.spf?.raw || `No SPF TXT record — add: v=spf1 ip4:${ip || "<ip>"} ~all` },
+      { label: "DKIM", ok: dkimOk, detail: dkimOk ? `Found at ${item.selector}._domainkey.${item.domain}` : `No DKIM TXT record at ${item.selector}._domainkey.${item.domain}` },
+    ];
+    const advisoryChecks = [
+      { label: "DMARC",          ok: dmarcOk, detail: dmarcOk ? (data.dmarc.raw + dmarcSrc) : `No DMARC record — add TXT at _dmarc.${item.domain}: v=DMARC1; p=none; rua=mailto:dmarc@${item.domain}` },
+      { label: "A (root)",       ok: aRootOk, detail: aRootOk ? data.aRoot.addrs.join(", ") : `No A record for ${item.domain}` },
+      { label: "A (mail.)",      ok: aMailOk, detail: aMailOk ? data.aMail.addrs.join(", ") : `No A record for mail.${item.domain}` },
+      { label: "MX",             ok: mxOk,    detail: mxOk    ? data.mx.host               : `No MX record for ${item.domain}` },
+      { label: "PTR/rDNS",       ok: ptrOk,   detail: ptrOk   ? `${data.ptr.ptr}${data.ptr.matches ? " (forward-confirmed ✓)" : " (FCrDNS unconfirmed)"}` : `No PTR for ${ip} — contact your VPS host` },
     ];
 
-    checks.forEach(({ label, ok, detail }) => {
-      const checkRow = document.createElement("div");
-      checkRow.className = "health-check-item " + (ok ? "check-ok" : "check-warn");
-      const icon = document.createElement("span");
-      icon.className = "check-icon";
-      icon.textContent = ok ? "✓" : "⚠";
-      const labelEl = document.createElement("span");
-      labelEl.className = "check-label";
-      labelEl.textContent = label + ":";
-      const detailEl = document.createElement("span");
-      detailEl.className = "check-detail";
-      detailEl.textContent = detail;
-      checkRow.appendChild(icon);
-      checkRow.appendChild(labelEl);
-      checkRow.appendChild(detailEl);
-      container.appendChild(checkRow);
-    });
+    const addSectionLabel = (text) => {
+      const lbl = document.createElement("p");
+      lbl.className = "form-hint check-section-label";
+      lbl.textContent = text;
+      container.appendChild(lbl);
+    };
+
+    addSectionLabel("Critical (required for sending):");
+    criticalChecks.forEach(c => appendCheckRow(container, c));
+
+    addSectionLabel("Advisory (improve deliverability):");
+    advisoryChecks.forEach(c => appendCheckRow(container, c));
 
     if (data.tips?.length) {
       const tipsTitle = document.createElement("p");
