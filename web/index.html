@@ -181,6 +181,17 @@
             </div>
           </div>
         </div>
+
+        <!-- Test Send -->
+        <div class="panel test-send-panel">
+          <h3>Test Send</h3>
+          <p class="section-desc">Send a single test email to verify your delivery setup before launching a campaign.</p>
+          <div class="test-send-row">
+            <input type="email" id="test-send-to" class="form-control" placeholder="recipient@example.com">
+            <button id="btn-test-send" class="btn btn-secondary">Send Test</button>
+          </div>
+          <div id="test-send-status" class="test-send-status"></div>
+        </div>
       </section>
 
       <!-- Tab Content: Campaign Wizard -->
@@ -254,6 +265,24 @@
                 <label for="wizard-domain-rotation" class="checkbox-label">🔀 Rotate sending domains (randomize From: domain per email)</label>
               </div>
               <small class="form-hint" id="domain-rotation-hint">Uses all configured domains from the <a href="#" class="nav-link-inline" data-tab="sending-domains">Sending Domains</a> tab. The local part of the From address stays the same; only the domain rotates. Requires DKIM keys to be generated for each domain.</small>
+            </div>
+
+            <div class="form-group">
+              <label>From Email Mode</label>
+              <div class="from-mode-radios">
+                <label class="radio-label">
+                  <input type="radio" name="from-mode" id="from-mode-static" value="static" checked>
+                  Static — use the From email exactly as configured in the SMTP file
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="from-mode" id="from-mode-dynamic" value="dynamic">
+                  Dynamic domain — generate a unique From email per recipient
+                </label>
+              </div>
+              <div id="dynamic-from-domain-group" style="display:none; margin-top:8px;">
+                <input type="text" id="wizard-dynamic-from-domain" class="form-control" placeholder="send.yourdomain.com">
+                <small class="form-hint">A unique address (e.g. <em>j.smith47@send.yourdomain.com</em>) is generated for each recipient. The domain must have DKIM keys configured in the Sending Domains tab.</small>
+              </div>
             </div>
 
             <div class="form-actions">
@@ -592,6 +621,12 @@
               </div>
 
               <div class="form-group">
+                <label for="settings-panel-domain">Panel Domain (optional)</label>
+                <input type="text" id="settings-panel-domain" class="form-control" placeholder="panel.yourdomain.com">
+                <small class="form-hint">Point this domain's A record to your VPS IP to access the panel via a custom URL. Separate from the SMTP domain.</small>
+              </div>
+
+              <div class="form-group">
                 <label for="settings-api-token">API Token</label>
                 <input type="text" id="settings-api-token" class="form-control" placeholder="Leave blank to clear; type to set">
                 <small class="form-hint">Required for public access. Sent via X-API-Token header or ?token= query.</small>
@@ -730,6 +765,12 @@
                   </label>
                   <small class="form-hint">Uncheck to skip MX port-25 pre-flight — useful when the relay handles routing</small>
                 </div>
+                <div class="form-group">
+                  <label>
+                    <input type="checkbox" id="settings-relay-tls-reject"> Relay TLS: verify certificate
+                  </label>
+                  <small class="form-hint">Off by default — relay servers often use self-signed certs or are accessed via IP. Enable only if connecting to a relay with a valid CA-signed certificate.</small>
+                </div>
               </div>
 
               <hr class="form-divider">
@@ -785,7 +826,11 @@
 
             </div><!-- /advanced -->
 
-            <button type="submit" class="btn btn-primary btn-glow" style="margin-top:8px">Save Configuration</button>
+            <div class="settings-actions-row">
+              <button type="submit" class="btn btn-primary btn-glow">Save Configuration</button>
+              <button type="button" id="btn-restart-pm2" class="btn btn-secondary">↺ Restart (PM2)</button>
+              <span id="pm2-restart-status" class="pm2-restart-status"></span>
+            </div>
           </form>
         </div>
       </section>

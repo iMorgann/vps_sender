@@ -23,7 +23,9 @@
       "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\vps-sender.js\")",
       "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\campaign\\\\engine.js\")",
       "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\scanner\\\\sender-health.js\")",
-      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\web\\\\app.js\")"
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\web\\\\app.js\")",
+      "Bash(grep -n \"innerHTML.*\\\\[^'\\\\\"].*data\\\\|innerHTML.*\\\\$.*item\\\\|innerHTML.*\\\\$.*data\" web/app.js)",
+      "Bash(node --check lib/mime/builder.js)"
     ]
   }
 }

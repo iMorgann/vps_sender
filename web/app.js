@@ -109,6 +109,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const isSending = status === "sending" || status === "paused";
     state.campaignRunning = status === "sending";
 
+    // Reset stats display when a new campaign starts so stale numbers don't persist
+    if (status === "sending") {
+      state.campaignStats = { total: 0, sent: 0, failed: 0, greylisted: 0, reachable: 0, dropped: 0 };
+      document.getElementById("stats-total").textContent = "0";
+      document.getElementById("stats-sent").textContent  = "0";
+      document.getElementById("stats-failed").textContent = "0";
+      document.getElementById("stats-greylisted").textContent = "0";
+      document.getElementById("stats-total-desc").textContent = "Reachable: 0 | Dropped: 0";
+      document.getElementById("stats-sent-pct").textContent = "0% Success rate";
+      document.getElementById("stats-failed-pct").textContent = "0% Failed";
+      document.getElementById("progress-bar").style.width = "0%";
+      document.getElementById("meta-speed").textContent = "0.0 emails/s";
+      document.getElementById("meta-elapsed").textContent = "0s";
+      document.getElementById("meta-eta").textContent = "--";
+      drawChart(0, 0, 0);
+    }
+
     document.getElementById("btn-start").disabled = status === "sending" || status === "paused" || status === "scanning";
     document.getElementById("btn-pause").disabled = status !== "sending" && status !== "paused";
     document.getElementById("btn-pause").textContent = status === "paused" ? "Resume" : "Pause";
@@ -238,10 +255,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Toggle dynamic-from domain input based on from-mode radio
+  document.querySelectorAll('input[name="from-mode"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      const isDynamic = document.getElementById("from-mode-dynamic").checked;
+      document.getElementById("dynamic-from-domain-group").style.display = isDynamic ? "block" : "none";
+    });
+  });
+
   wizardForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const checkedBodies = Array.from(document.querySelectorAll('input[name="htmlBodies"]:checked')).map(el => el.value);
     const checkedAttachments = Array.from(document.querySelectorAll('input[name="attachments"]:checked')).map(el => el.value);
+
+    const isDynamicFrom = document.querySelector('input[name="from-mode"]:checked')?.value === "dynamic";
+    const isDomainRot   = document.getElementById("wizard-domain-rotation").checked;
+    if (isDynamicFrom && isDomainRot) {
+      appendLog("Warning: Dynamic From Domain overrides Domain Rotation — domain rotation will be ignored.", "warn");
+    }
 
     const payload = {
       recipientsFile: document.getElementById("wizard-recipient-file").value,
@@ -250,9 +281,12 @@ document.addEventListener("DOMContentLoaded", () => {
       htmlFiles: checkedBodies,
       attachmentFiles: checkedAttachments,
       smtpFile: document.getElementById("wizard-smtp-file").value,
-      rotEvery:       parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
-      resume:         document.getElementById("wizard-resume").checked,
-      domainRotation: document.getElementById("wizard-domain-rotation").checked
+      rotEvery:          parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
+      resume:            document.getElementById("wizard-resume").checked,
+      domainRotation:    isDomainRot,
+      dynamicFromDomain: isDynamicFrom
+        ? (document.getElementById("wizard-dynamic-from-domain").value.trim() || "")
+        : "",
     };
 
     try {
@@ -849,19 +883,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnCopyUrl      = document.getElementById("btn-copy-url");
 
   function updatePublicUrlDisplay() {
-    const bind   = bindHostSelect.value;
-    const domain = document.getElementById("settings-domain").value.trim();
-    const port   = document.getElementById("settings-port").value || "3000";
-    const isPublic = bind === "0.0.0.0";
-    // Token field is intentionally blank on load (never pre-filled for security).
-    // Use serverTokenIsSet to know if a token is already configured on the server.
-    const hasToken = serverTokenIsSet || !!apiTokenInput.value.trim();
+    const bind        = bindHostSelect.value;
+    const panelDomain = document.getElementById("settings-panel-domain").value.trim();
+    const smtpDomain  = document.getElementById("settings-domain").value.trim();
+    const port        = document.getElementById("settings-port").value || "3000";
+    const isPublic    = bind === "0.0.0.0";
+    const hasToken    = serverTokenIsSet || !!apiTokenInput.value.trim();
     publicWarning.style.display = (isPublic && !hasToken) ? "block" : "none";
 
-    // Public URL
     if (isPublic) {
-      const host = domain || window.location.hostname;
-      publicUrlText.textContent = `http://${host}:${port}`;
+      const proto = window.location.protocol; // inherit http: or https: from current connection
+      const url = panelDomain
+        ? `${proto}//${panelDomain}`
+        : `${proto}//${smtpDomain || window.location.hostname}:${port}`;
+      publicUrlText.textContent = url;
       publicUrlGroup.style.display = "block";
     } else {
       publicUrlGroup.style.display = "none";
@@ -871,6 +906,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindHostSelect.addEventListener("change", updatePublicUrlDisplay);
   apiTokenInput.addEventListener("input", updatePublicUrlDisplay);
   document.getElementById("settings-domain").addEventListener("input", updatePublicUrlDisplay);
+  document.getElementById("settings-panel-domain").addEventListener("input", updatePublicUrlDisplay);
   document.getElementById("settings-port").addEventListener("input", updatePublicUrlDisplay);
 
   btnCopyUrl.addEventListener("click", () => {
@@ -888,6 +924,26 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("settings-transport").addEventListener("change", e => {
     toggleRelayFields(e.target.value === "relay");
   });
+
+  // Advisory: when relay host is non-loopback and TLS is off, show a warning
+  function updateRelayTlsAdvisory() {
+    const host = document.getElementById("settings-relay-host").value.trim();
+    const tlsOff = !document.getElementById("settings-relay-tls-reject").checked;
+    const isLoopback = /^(127\.|::1$|localhost$)/i.test(host);
+    let advisory = document.getElementById("relay-tls-advisory");
+    if (!advisory) {
+      advisory = document.createElement("small");
+      advisory.id = "relay-tls-advisory";
+      advisory.className = "form-hint";
+      advisory.style.color = "var(--warning)";
+      document.getElementById("settings-relay-tls-reject").closest(".form-group").appendChild(advisory);
+    }
+    advisory.textContent = (!isLoopback && tlsOff)
+      ? "⚠ External relay host with TLS verification off — ensure you trust this server."
+      : "";
+  }
+  document.getElementById("settings-relay-host").addEventListener("input", updateRelayTlsAdvisory);
+  document.getElementById("settings-relay-tls-reject").addEventListener("change", updateRelayTlsAdvisory);
 
   // ── Settings sub-tabs ───────────────────────────────────────────────────────
   document.querySelectorAll(".settings-subtab-btn").forEach(btn => {
@@ -1173,12 +1229,12 @@ document.addEventListener("DOMContentLoaded", () => {
     return Promise.resolve();
   }
 
-  function appendCheckRow(container, { label, ok, detail }) {
+  function appendCheckRow(container, { label, ok, detail, critical = false }) {
     const checkRow = document.createElement("div");
-    checkRow.className = "health-check-item " + (ok ? "check-ok" : "check-warn");
+    checkRow.className = "health-check-item " + (ok ? "pass" : critical ? "fail" : "warn");
     const icon = document.createElement("span");
     icon.className = "check-icon";
-    icon.textContent = ok ? "✓" : "⚠";
+    icon.textContent = ok ? "✓" : critical ? "✗" : "⚠";
     const labelEl = document.createElement("span");
     labelEl.className = "check-label";
     labelEl.textContent = label + ":";
@@ -1257,15 +1313,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Critical checks first, then advisory
     const criticalChecks = [
-      { label: "SPF",  ok: spfOk,  detail: data.spf?.raw || `No SPF TXT record — add: v=spf1 ip4:${ip || "<ip>"} ~all` },
-      { label: "DKIM", ok: dkimOk, detail: dkimOk ? `Found at ${item.selector}._domainkey.${item.domain}` : `No DKIM TXT record at ${item.selector}._domainkey.${item.domain}` },
+      { label: "SPF",  ok: spfOk,  critical: true, detail: data.spf?.raw || `No SPF TXT record — add: v=spf1 ip4:${ip || "<ip>"} ~all` },
+      { label: "DKIM", ok: dkimOk, critical: true, detail: dkimOk ? `Found at ${item.selector}._domainkey.${item.domain}` : `No DKIM TXT record at ${item.selector}._domainkey.${item.domain}` },
     ];
     const advisoryChecks = [
-      { label: "DMARC",          ok: dmarcOk, detail: dmarcOk ? (data.dmarc.raw + dmarcSrc) : `No DMARC record — add TXT at _dmarc.${item.domain}: v=DMARC1; p=none; rua=mailto:dmarc@${item.domain}` },
-      { label: "A (root)",       ok: aRootOk, detail: aRootOk ? data.aRoot.addrs.join(", ") : `No A record for ${item.domain}` },
-      { label: "A (mail.)",      ok: aMailOk, detail: aMailOk ? data.aMail.addrs.join(", ") : `No A record for mail.${item.domain}` },
-      { label: "MX",             ok: mxOk,    detail: mxOk    ? data.mx.host               : `No MX record for ${item.domain}` },
-      { label: "PTR/rDNS",       ok: ptrOk,   detail: ptrOk   ? `${data.ptr.ptr}${data.ptr.matches ? " (forward-confirmed ✓)" : " (FCrDNS unconfirmed)"}` : `No PTR for ${ip} — contact your VPS host` },
+      { label: "DMARC",    ok: dmarcOk, detail: dmarcOk ? (data.dmarc.raw + dmarcSrc) : `No DMARC record — add TXT at _dmarc.${item.domain}: v=DMARC1; p=none; rua=mailto:dmarc@${item.domain}` },
+      { label: "A (root)", ok: aRootOk, detail: aRootOk ? data.aRoot.addrs.join(", ") : `No A record for ${item.domain}` },
+      { label: "A (mail)", ok: aMailOk, detail: aMailOk ? data.aMail.addrs.join(", ") : `No A record for mail.${item.domain}` },
+      { label: "MX",       ok: mxOk,    detail: mxOk    ? data.mx.host               : `No MX record for ${item.domain}` },
     ];
 
     const addSectionLabel = (text) => {
@@ -1280,6 +1335,64 @@ document.addEventListener("DOMContentLoaded", () => {
 
     addSectionLabel("Advisory (improve deliverability):");
     advisoryChecks.forEach(c => appendCheckRow(container, c));
+
+    // PTR row with expandable provider guide
+    const ptrFcrdns  = data.ptr?.matches;
+    const ptrDetail  = ptrOk
+      ? `${data.ptr.ptr}${ptrFcrdns ? " (forward-confirmed ✓)" : " (FCrDNS unconfirmed — see guide below)"}`
+      : `No PTR record for ${ip || "your sending IP"}`;
+    appendCheckRow(container, { label: "PTR/rDNS", ok: ptrOk && ptrFcrdns, detail: ptrDetail });
+
+    if (!ptrOk || !ptrFcrdns) {
+      const heloHint   = item.domain ? `mail.${item.domain}` : "mail.yourdomain.com";
+      const currentVal = ptrOk ? (data.ptr.ptr || "none") : "none";
+
+      // Build with DOM — avoid innerHTML on server-supplied values (ip, currentVal, heloHint)
+      const guide = document.createElement("div");
+      guide.className = "ptr-guide";
+
+      const title = document.createElement("strong");
+      title.textContent = "How to set PTR / rDNS";
+      guide.appendChild(title);
+
+      function metaLine(...parts) {
+        const d = document.createElement("div");
+        d.className = "ptr-guide-meta";
+        parts.forEach(p => {
+          if (typeof p === "string") { d.appendChild(document.createTextNode(p)); }
+          else {
+            const c = document.createElement("code");
+            c.textContent = p.code;
+            d.appendChild(c);
+          }
+        });
+        return d;
+      }
+      guide.appendChild(metaLine("Current PTR for ", {code: ip || "your IP"}, ": ", {code: currentVal}, " → Required: ", {code: heloHint}));
+
+      const staticSteps = [
+        ["Hetzner", "Robot console → Servers → your server → IPs → pencil icon → Reverse DNS"],
+        ["DigitalOcean", "Droplet → Networking → Configure PTR records"],
+        ["Vultr", "Products → Cloud Compute → your instance → Settings → Reverse DNS"],
+        ["Linode / Akamai", "Linodes → your instance → Network → Reverse DNS"],
+        ["OVH / SoYouStart", "IP Manager → gear icon → Modify reverse"],
+        ["AWS EC2", "Request via the AWS console IP Address form, or use an Elastic IP"],
+        ["Generic", "VPS control panel → Networking → Reverse DNS / rDNS"],
+      ];
+      const ul = document.createElement("ul");
+      ul.className = "ptr-guide-steps";
+      staticSteps.forEach(([provider, steps]) => {
+        const li = document.createElement("li");
+        const b = document.createElement("strong");
+        b.textContent = provider;
+        li.appendChild(b);
+        li.appendChild(document.createTextNode(": " + steps));
+        ul.appendChild(li);
+      });
+      guide.appendChild(ul);
+      guide.appendChild(metaLine("Set it to: ", {code: heloHint}, " (must match your SMTP HELO hostname)"));
+      container.appendChild(guide);
+    }
 
     if (data.tips?.length) {
       const tipsTitle = document.createElement("p");
@@ -1699,8 +1812,10 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("settings-relay-port").value       = data.relayPort      ?? 587;
       document.getElementById("settings-relay-user").value       = data.relayUser      || "";
       document.getElementById("settings-relay-pass").value       = "";  // never pre-fill password
-      document.getElementById("settings-prescan-relay").checked  = data.preScanRelay   !== false;
-      document.getElementById("settings-envelope-domain").value  = data.envelopeDomain || "";
+      document.getElementById("settings-prescan-relay").checked      = data.preScanRelay             !== false;
+      document.getElementById("settings-relay-tls-reject").checked  = !!data.relayTlsRejectUnauthorized;
+      document.getElementById("settings-envelope-domain").value     = data.envelopeDomain            || "";
+      document.getElementById("settings-panel-domain").value        = data.panelDomain               || "";
       toggleRelayFields(data.transport === "relay");
 
       // Warmup
@@ -1772,12 +1887,14 @@ document.addEventListener("DOMContentLoaded", () => {
       directToMxOnly:        document.getElementById("settings-direct-mx").checked,
       allowWeakDomains:      document.getElementById("settings-allow-weak").checked,
       transport:             document.getElementById("settings-transport").value,
-      relayHost:             document.getElementById("settings-relay-host").value.trim() || "127.0.0.1",
-      relayPort:             parseInt(document.getElementById("settings-relay-port").value, 10) || 587,
-      relayUser:             document.getElementById("settings-relay-user").value.trim(),
-      relayPass:             relayPassDirty ? document.getElementById("settings-relay-pass").value : "***",
-      preScanRelay:          document.getElementById("settings-prescan-relay").checked,
-      envelopeDomain:        document.getElementById("settings-envelope-domain").value.trim(),
+      relayHost:                  document.getElementById("settings-relay-host").value.trim() || "127.0.0.1",
+      relayPort:                  parseInt(document.getElementById("settings-relay-port").value, 10) || 587,
+      relayUser:                  document.getElementById("settings-relay-user").value.trim(),
+      relayPass:                  relayPassDirty ? document.getElementById("settings-relay-pass").value : "***",
+      preScanRelay:               document.getElementById("settings-prescan-relay").checked,
+      relayTlsRejectUnauthorized: document.getElementById("settings-relay-tls-reject").checked,
+      envelopeDomain:             document.getElementById("settings-envelope-domain").value.trim(),
+      panelDomain:                document.getElementById("settings-panel-domain").value.trim(),
       warmup: {
         enabled:         document.getElementById("settings-warmup-enabled").checked,
         dailyLimit:      parseInt(document.getElementById("settings-warmup-daily").value, 10)     || 100,
@@ -1817,6 +1934,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ── PM2 Restart ─────────────────────────────────────────────────────────────
+  document.getElementById("btn-restart-pm2").addEventListener("click", async () => {
+    const btn    = document.getElementById("btn-restart-pm2");
+    const status = document.getElementById("pm2-restart-status");
+    btn.disabled = true;
+    status.textContent = "Restarting…";
+    status.className   = "pm2-restart-status pm2-pending";
+    try {
+      const res  = await apiFetch("/api/server/restart", "POST", {});
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        status.textContent = "✓ " + data.message;
+        status.className   = "pm2-restart-status pm2-ok";
+        appendLog("PM2 restart requested — the server will come back in a few seconds.", "system");
+      } else {
+        status.textContent = "✗ " + (data.error || "Restart failed");
+        status.className   = "pm2-restart-status pm2-fail";
+        btn.disabled       = false;
+      }
+    } catch {
+      status.textContent = "✗ Request failed";
+      status.className   = "pm2-restart-status pm2-fail";
+      btn.disabled       = false;
+    }
+  });
+
   // ── Canvas Statistics Chart ─────────────────────────────────────────────────
   const chartCanvas = document.getElementById("stats-chart");
   
@@ -1833,7 +1976,7 @@ document.addEventListener("DOMContentLoaded", () => {
       ctx.lineWidth = 12;
       ctx.stroke();
       
-      ctx.fillStyle = "var(--text-dim)";
+      ctx.fillStyle = "#6b7280";
       ctx.font = "12px Outfit";
       ctx.textAlign = "center";
       ctx.fillText("No sending data yet", 110, 64);
@@ -1875,9 +2018,46 @@ document.addEventListener("DOMContentLoaded", () => {
       ctx.fill();
 
       // Label
-      ctx.fillStyle = "var(--text-main)";
+      ctx.fillStyle = "#e5e7eb";
       ctx.fillText(`${seg.label}: ${seg.val}`, 152, ly);
       ly += 22;
+    });
+  }
+
+  // ── Test Send ───────────────────────────────────────────────────────────────
+  const btnTestSend       = document.getElementById("btn-test-send");
+  const testSendTo        = document.getElementById("test-send-to");
+  const testSendStatus    = document.getElementById("test-send-status");
+
+  if (btnTestSend) {
+    btnTestSend.addEventListener("click", async () => {
+      const to = testSendTo.value.trim();
+      if (!to || !to.includes("@")) {
+        testSendStatus.className = "test-send-status fail";
+        testSendStatus.textContent = "Enter a valid email address.";
+        return;
+      }
+      btnTestSend.disabled = true;
+      testSendStatus.className = "test-send-status pending";
+      testSendStatus.textContent = "Sending…";
+      try {
+        const res  = await apiFetch("/api/test-send", "POST", { to });
+        const data = await res.json();
+        if (data.ok) {
+          testSendStatus.className = "test-send-status ok";
+          testSendStatus.textContent = `Delivered${data.tls ? " via TLS" : ""} from ${data.from} → ${data.to}`;
+          appendLog(`Test send OK → ${data.to} (${data.tls ? "TLS" : "plain"})`, "sent");
+        } else {
+          testSendStatus.className = "test-send-status fail";
+          testSendStatus.textContent = data.error || "Send failed.";
+          appendLog(`Test send failed → ${to}: ${data.error}`, "fail");
+        }
+      } catch (err) {
+        testSendStatus.className = "test-send-status fail";
+        testSendStatus.textContent = "Request error: " + err.message;
+      } finally {
+        btnTestSend.disabled = false;
+      }
     });
   }
 

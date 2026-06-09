@@ -61,11 +61,14 @@ function loadConfig() {
     port:                  3000,
     domain:                "",
     transport:             "direct",
-    relayHost:             "127.0.0.1",
-    relayPort:             587,
-    relayUser:             "",
-    relayPass:             "",
-    envelopeDomain:        "",
+    relayHost:                  "127.0.0.1",
+    relayPort:                  587,
+    relayUser:                  "",
+    relayPass:                  "",
+    relayTlsRejectUnauthorized: false,
+    envelopeDomain:             "",
+    panelDomain:                "",
+    dynamicFromDomain:          "",
     preScanRelay:          true,
     dkim:                  {},
     rateLimits: {
@@ -347,7 +350,7 @@ function saveSmtpConfig(entries, filepath) {
 }
 
 function loadSmtpConfig(filepath) {
-  const text = fs.readFileSync(filepath, "utf8");
+  const text = fs.readFileSync(filepath, "utf8").replace(/^﻿/, ""); // strip UTF-8 BOM (Windows Notepad)
   const entries = [];
   let cur = null;
   for (const raw of text.split(/\r?\n/)) {
@@ -652,10 +655,10 @@ async function startWebServer() {
       }
       allowOrigin = origin || "*";
     } else {
-      if (cfgDomain) {
-        const cfgDomainEsc = cfgDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const domainPat = new RegExp(`^https?://${cfgDomainEsc}(:\\d+)?$`);
-        const allowed   = !origin || origin.match(localhostPat) || origin.match(domainPat);
+      const allowedDomains = [cfgDomain, getCachedConfig().panelDomain].filter(Boolean);
+      if (allowedDomains.length) {
+        const domainPats = allowedDomains.map(d => new RegExp(`^https?://${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(:\\d+)?$`));
+        const allowed   = !origin || origin.match(localhostPat) || domainPats.some(p => origin.match(p));
         allowOrigin = allowed ? (origin || "*") : "";
       } else {
         allowOrigin = "*";
@@ -781,9 +784,12 @@ async function startWebServer() {
           relayPort:             config.relayPort      || 587,
           relayUser:             config.relayUser      || "",
           relayPass:             config.relayPass      ? "***" : "",
-          envelopeDomain:        config.envelopeDomain || "",
-          preScanRelay:          config.preScanRelay   !== false,
-          os:                    process.platform,
+          envelopeDomain:             config.envelopeDomain             || "",
+          preScanRelay:               config.preScanRelay               !== false,
+          relayTlsRejectUnauthorized: !!config.relayTlsRejectUnauthorized,
+          panelDomain:                config.panelDomain                || "",
+          dynamicFromDomain:          config.dynamicFromDomain          || "",
+          os:                         process.platform,
           warmup: {
             enabled:         !!(config.warmup && config.warmup.enabled),
             dailyLimit:      (config.warmup && config.warmup.dailyLimit != null) ? config.warmup.dailyLimit : 100,
@@ -861,6 +867,12 @@ async function startWebServer() {
         }
         if (body.envelopeDomain !== undefined) {
           body.envelopeDomain = String(body.envelopeDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+        }
+        if (body.panelDomain !== undefined) {
+          body.panelDomain = String(body.panelDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+        }
+        if (body.relayTlsRejectUnauthorized !== undefined) {
+          body.relayTlsRejectUnauthorized = !!body.relayTlsRejectUnauthorized;
         }
         if (body.preScanRelay !== undefined) {
           body.preScanRelay = !!body.preScanRelay;
@@ -1111,9 +1123,10 @@ async function startWebServer() {
         if (body.attachmentFiles !== undefined) {
           safe.attachmentFiles = (Array.isArray(body.attachmentFiles) ? body.attachmentFiles : []).map(safeFilePath).filter(Boolean);
         }
-        if (body.rotEvery        !== undefined) safe.rotEvery        = parseInt(body.rotEvery, 10) || 2;
-        if (body.resume          !== undefined) safe.resume          = !!body.resume;
-        if (body.domainRotation  !== undefined) safe.domainRotation  = !!body.domainRotation;
+        if (body.rotEvery          !== undefined) safe.rotEvery          = parseInt(body.rotEvery, 10) || 2;
+        if (body.resume            !== undefined) safe.resume            = !!body.resume;
+        if (body.domainRotation    !== undefined) safe.domainRotation    = !!body.domainRotation;
+        if (body.dynamicFromDomain !== undefined) safe.dynamicFromDomain = String(body.dynamicFromDomain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1128,6 +1141,7 @@ async function startWebServer() {
         }
         recentLogs.length = 0;
         lastProgress      = null;
+        engineState       = { status: "idle", sent: 0, failed: 0, dropped: 0, greylisted: 0, total: 0, speed: 0, elapsed: 0, eta: 0, current: null };
         campaignCancelToken = { cancelled: false, paused: false };
         runWebCampaign().catch(err => {
           broadcastSSE({ type: "log", text: `Campaign error: ${err.message}`, logClass: "fail" });
@@ -1166,6 +1180,64 @@ async function startWebServer() {
         campaignCancelToken.paused    = false;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      // ── Test send ────────────────────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/api/test-send") {
+        const body   = await getJsonBody();
+        const toAddr = String(body.to || "").replace(/[\r\n]/g, "").trim();
+        if (!toAddr || !toAddr.includes("@")) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid recipient address" }));
+          return;
+        }
+        const cfg = getCachedConfig();
+        const { getTransport } = require("./lib/delivery/transport");
+        const { buildMailOptions } = require("./lib/mime/builder");
+        const deliver = getTransport(cfg);
+
+        let smtpEntry = null;
+        if (webCampaignConfig.smtpFile && webCampaignConfig.smtpFile !== "direct") {
+          try {
+            const entries = loadSmtpConfig(webCampaignConfig.smtpFile);
+            if (entries.length) smtpEntry = entries[0];
+          } catch { /* fall through */ }
+        }
+        const fromEmail = smtpEntry
+          ? (smtpEntry.fromEmail || smtpEntry.fromemail || `test@${cfg.domain || "localhost"}`)
+          : `test@${cfg.domain || "localhost"}`;
+
+        let mime;
+        try {
+          mime = buildMailOptions({
+            to: toAddr, fromEmail, fromName: "Test Send",
+            subject: "Test Email — VPS Sender",
+            html: "<p>This is a test email sent from your VPS Sender panel.</p>",
+            attachments: [], config: cfg, templateVars: { email: toAddr, domain: toAddr.split("@")[1], name: "Test" },
+          });
+        } catch (buildErr) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "MIME build failed: " + buildErr.message }));
+          return;
+        }
+
+        try {
+          const mxDomain = toAddr.split("@")[1];
+          const result = await deliver(toAddr, mxDomain, mime, fromEmail, cfg.heloHost || "mail.localhost", {
+            tlsRejectUnauthorized: cfg.tlsRejectUnauthorized !== false,
+            relayHost:                cfg.relayHost || "127.0.0.1",
+            relayPort:                cfg.relayPort || 587,
+            relayUser:                cfg.relayUser || "",
+            relayPass:                cfg.relayPass || "",
+            relayTlsRejectUnauthorized: cfg.relayTlsRejectUnauthorized ?? false,
+          });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, tls: result.tls, from: fromEmail, to: toAddr }));
+        } catch (sendErr) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: sendErr.message }));
+        }
         return;
       }
 
@@ -1276,6 +1348,32 @@ async function startWebServer() {
         return;
       }
 
+      // ── PM2 restart ─────────────────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/api/server/restart") {
+        // Prefer app name ("vps-sender") over numeric ID — matches `pm2 restart vps-sender`
+        const pmName = process.env.name;
+        const pmId   = process.env.pm_id;
+        const target = pmName ?? pmId;
+        if (target === undefined || target === null) {
+          res.writeHead(409, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not running under PM2 — restart the process manually." }));
+          return;
+        }
+        const { execFile } = require("child_process");
+        // Locate pm2 binary safely — prefer the one on PATH
+        const pm2Bin = process.platform === "win32" ? "pm2.cmd" : "pm2";
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, message: `Restarting PM2 process ${target}…` }));
+        // Delay slightly so the HTTP response flushes before the process restarts
+        setTimeout(() => {
+          execFile(pm2Bin, ["restart", String(target)], { timeout: 10_000 }, (err) => {
+            if (err) logger.warn("pm2_restart_failed", { target, error: err.message });
+            else     logger.info("pm2_restarted",       { target });
+          });
+        }, 400);
+        return;
+      }
+
       // ── Relay health check ───────────────────────────────────────────────
       if (req.method === "GET" && pathname === "/api/relay/health") {
         const config    = getCachedConfig();
@@ -1352,13 +1450,16 @@ async function startWebServer() {
   });
 
   server.listen(port, host, async () => {
-    const localUrl = `http://localhost:${port}`;
-    const bindUrl  = host === "0.0.0.0"
-      ? (getCachedConfig().domain ? `http://${getCachedConfig().domain}:${port}` : `http://<server-ip>:${port}`)
+    const localUrl   = `http://localhost:${port}`;
+    const panelDom   = getCachedConfig().panelDomain;
+    const smtpDomain = getCachedConfig().domain;
+    const bindUrl    = host === "0.0.0.0"
+      ? (panelDom ? `http://${panelDom}` : smtpDomain ? `http://${smtpDomain}:${port}` : `http://<server-ip>:${port}`)
       : localUrl;
     console.log(`\n  ${g("✓")} ${b("Web GUI running at:")} ${c(localUrl)}`);
     if (host === "0.0.0.0") {
       console.log(`  ${g("✓")} ${b("Public URL:")} ${c(bindUrl)}`);
+      if (panelDom) console.log(`  ${g("✓")} ${b("Panel domain:")} ${c(panelDom)} ${"\x1b[90m"}(add A record → your VPS IP)${"\x1b[0m"}`);
       if (!getCachedConfig().apiToken) {
         console.log(`\n  ${"\x1b[33m"}⚠  No API token set — GUI is open to the internet!${"\x1b[0m"}`);
         console.log(`  Set one via Settings in the web UI or in config.json.\n`);
@@ -1392,15 +1493,16 @@ async function startWebServer() {
 
 // ── Web campaign config ────────────────────────────────────────────────────────
 let webCampaignConfig = {
-  recipientsFile: "recipients.txt",
-  namesFile:      "names.txt",
-  subjectsFile:   "subjects.txt",
-  htmlFiles:      ["body.html"],
-  attachmentFiles:[],
-  smtpFile:       "smtp.txt",
-  rotEvery:       2,
-  resume:         true,
-  domainRotation: false,
+  recipientsFile:    "recipients.txt",
+  namesFile:         "names.txt",
+  subjectsFile:      "subjects.txt",
+  htmlFiles:         ["body.html"],
+  attachmentFiles:   [],
+  smtpFile:          "smtp.txt",
+  rotEvery:          2,
+  resume:            true,
+  domainRotation:    false,
+  dynamicFromDomain: "",
 };
 
 async function runWebScanner(emails, includeWeak, outputFile) {
@@ -1512,7 +1614,7 @@ async function runWebCampaign() {
     attachments,
     allEmails,
     domainPool,
-    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, _proxy: PROXY },
+    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,
     onProgress: s => {
