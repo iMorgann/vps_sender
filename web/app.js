@@ -262,8 +262,35 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("dynamic-from-domain-group").style.display = mode === "dynamic" ? "block" : "none";
   }
   document.querySelectorAll('input[name="from-mode"]').forEach(radio => {
-    radio.addEventListener("change", updateFromModeUI);
+    radio.addEventListener("change", () => { updateFromModeUI(); updateSenderPreview(); });
   });
+
+  function updateSenderPreview() {
+    const mode     = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
+    const fromEl   = document.getElementById("preview-from-value");
+    const senderEl = document.getElementById("preview-sender-value");
+    if (!fromEl || !senderEl) return;
+
+    if (mode === "fixed") {
+      const val = document.getElementById("wizard-fixed-from-email")?.value.trim() || "";
+      fromEl.textContent = val || "sender@yourdomain.com";
+      fromEl.className   = "sender-preview-value" + (val ? "" : " text-dim");
+    } else if (mode === "dynamic") {
+      const domain = document.getElementById("wizard-dynamic-from-domain")?.value.trim() || "";
+      fromEl.textContent = domain ? `j.smith47@${domain}` : "j.smith47@yourdomain.com  (unique per recipient)";
+      fromEl.className   = "sender-preview-value text-dim";
+    } else {
+      fromEl.textContent = "fromEmail from SMTP file  (rotated per send)";
+      fromEl.className   = "sender-preview-value text-dim";
+    }
+
+    const relayFrom = document.getElementById("settings-relay-from-email")?.value.trim() || "";
+    senderEl.textContent = relayFrom || "not set — configure in Settings → Transport & Relay";
+    senderEl.className   = "sender-preview-value" + (relayFrom ? "" : " text-dim");
+  }
+
+  document.getElementById("wizard-fixed-from-email")?.addEventListener("input", updateSenderPreview);
+  document.getElementById("wizard-dynamic-from-domain")?.addEventListener("input", updateSenderPreview);
 
   wizardForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1834,6 +1861,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try { document.getElementById("settings-rate-limits").value = JSON.stringify(data.rateLimits || {}, null, 2); } catch {}
 
       updatePublicUrlDisplay();
+      updateSenderPreview();
     } catch (e) {
       appendLog("Failed to load settings from server", "fail");
     }
@@ -2150,6 +2178,17 @@ document.addEventListener("DOMContentLoaded", () => {
     ts.textContent = `Checked at ${new Date(data.checkedAt).toLocaleTimeString()}`;
     blacklistResults.appendChild(ts);
   }
+
+  // ── Clear Send History ──────────────────────────────────────────────────────
+  document.getElementById("btn-clear-history")?.addEventListener("click", async () => {
+    if (!confirm("Clear all send history? This lets you resend to the same recipients. The results CSV will also be deleted.")) return;
+    try {
+      await apiFetch("/api/campaign/clear-history", "POST");
+      appendLog("Send history cleared — all recipients will be treated as new on next campaign.", "system");
+    } catch (err) {
+      appendLog("Error clearing history: " + err.message, "fail");
+    }
+  });
 
   // ── Initial Load ────────────────────────────────────────────────────────────
   loadSettings();

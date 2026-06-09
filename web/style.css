@@ -1657,6 +1657,51 @@ select.form-control option:hover {
   color: var(--text-main);
 }
 
+/* ── Sender Preview Box ─────────────────────────────────────────────────────── */
+.sender-preview-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 16px;
+}
+.sender-preview-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.sender-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+}
+.sender-preview-label {
+  font-weight: 600;
+  min-width: 60px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.sender-preview-value {
+  color: var(--text-main);
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+/* ── Danger outline button ───────────────────────────────────────────────────── */
+.btn-danger-outline {
+  background: transparent;
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+.btn-danger-outline:hover {
+  background: rgba(244,63,94,0.08);
+}
+
 /* ── Relay Manager Tab ──────────────────────────────────────────────────────── */
 
 #tab-relay-manager.active {

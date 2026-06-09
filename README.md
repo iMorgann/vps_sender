@@ -360,6 +360,8 @@ Auto-created on first run with safe defaults. Edit by hand, via the Settings tab
 | `relayPass` | `""` | Relay SMTP password |
 | `envelopeDomain` | `""` | Overrides the SMTP envelope `MAIL FROM` domain for split-header signing. See [Split-Header Signing](#split-header-signing) |
 | `preScanRelay` | `true` | When `true`, the MX pre-flight scan runs even in relay mode. Set `false` to skip and queue all recipients directly |
+| `relayFromEmail` | `""` | Override SMTP envelope `MAIL FROM` to a specific address. Required for Mailcow and other relays that enforce authenticated user = envelope sender. See [Relay From Email](#relay-from-email-mailcow--postal-pattern) |
+| `fromEmailOverride` | `""` | Fixed `From:` address for all campaign emails. Set via Campaign Wizard → From Address Mode → Fixed |
 
 ### Warmup Settings
 
@@ -509,6 +511,37 @@ Then set `config.json`:
 
 ---
 
+## Mailcow Integration
+
+If you have [Mailcow](https://mailcow.email) installed on the same VPS:
+
+1. **Mailcow listens on port 587** via docker-proxy — this is the submission port for authenticated sending
+2. **Mailcow enforces `authenticated user = envelope sender`** — you must set `relayFromEmail` to match your Mailcow account
+3. **Mailcow delivers from your VPS IP** — check your IP reputation in **Dashboard → IP Reputation Check** before sending
+
+**Settings in `config.json`:**
+
+```json
+{
+  "transport": "relay",
+  "relayHost": "127.0.0.1",
+  "relayPort": 587,
+  "relayUser": "campaign@yourdomain.com",
+  "relayPass": "your-mailcow-account-password",
+  "relayFromEmail": "campaign@yourdomain.com",
+  "preScanRelay": false
+}
+```
+
+> The display `From:` can be any address. The `Sender:` header carries the Mailcow account address for DKIM alignment.
+
+**DNS requirements for the Mailcow account domain:**
+- SPF: `v=spf1 ip4:<your-vps-ip> ~all`
+- DKIM: set up via Mailcow Admin → Mail Setup → DKIM
+- PTR: your VPS IP should reverse-resolve to your domain (set in VPS control panel)
+
+---
+
 ## Split-Header Signing
 
 Split-header signing lets you use **any visible `From:` address** while maintaining proper SPF and DKIM alignment for deliverability.
@@ -539,6 +572,49 @@ DMARC: `TXT _dmarc.mail.myserver.com "v=DMARC1; p=none; rua=mailto:dmarc@mail.my
 All DNS records for `mail.myserver.com` — the `smtp.txt` `From:` can be anything.
 
 > Leave `envelopeDomain` empty to use the sender's own domain for both envelope and header (standard mode).
+
+---
+
+## Relay From Email (Mailcow / Postal Pattern)
+
+Some authenticated relays — Mailcow, Postal, and others — enforce that the SMTP envelope `MAIL FROM` must match the authenticated user. If you send from `alice@brand.com` but authenticate as `relay@myserver.com`, the relay rejects with `553 5.7.1 Sender address rejected: not owned by user`.
+
+`relayFromEmail` solves this by separating the envelope sender from the display `From:`:
+
+| Layer | Address | Purpose |
+|-------|---------|---------|
+| SMTP envelope `MAIL FROM` | `relayFromEmail` | What the relay authenticates — must match the relay account |
+| Email header `Sender:` | `relayFromEmail` | DKIM/SPF anchor — receiving servers check this for alignment |
+| Email header `From:` | Campaign sender (smtp.txt / Fixed / Unique) | What the recipient sees |
+
+**Config example for Mailcow:**
+
+```json
+{
+  "transport": "relay",
+  "relayHost": "127.0.0.1",
+  "relayPort": 587,
+  "relayUser": "campaign@myserver.com",
+  "relayPass": "yourpassword",
+  "relayFromEmail": "campaign@myserver.com"
+}
+```
+
+The display `From:` can be any address — a brand name, a different domain, etc. The `Sender:` header ensures DKIM/SPF validates against the relay account's domain.
+
+---
+
+## From Address Modes (Campaign Wizard)
+
+Three modes control the `From:` address recipients see. Switch between them in the Campaign Wizard.
+
+| Mode | Behavior |
+|------|----------|
+| **SMTP list** (default) | `From:` = `fromEmail` from `smtp.txt`, rotated per sender rotation interval |
+| **Fixed** | Every recipient gets the same `From:` address — specify it in "Fixed From Email" |
+| **Unique per recipient** | A random local-part is generated per recipient: `j.smith47@yourdomain.com`, `alex.white@yourdomain.com`, etc. You specify the domain. |
+
+The **Sender Preview** box at the bottom of the Campaign Wizard shows both the current `From:` and `Sender:` values before you launch.
 
 ---
 
@@ -716,6 +792,9 @@ Set it via:
 | `/api/campaign/pause` | POST | Pause running campaign |
 | `/api/campaign/resume` | POST | Resume paused campaign |
 | `/api/campaign/stop` | POST | Cancel running campaign |
+| `/api/campaign/clear-history` | POST | Delete all send history (SQLite + CSV) — lets you resend to the same recipients |
+| `/api/test-send` | POST | Send a single test email to verify delivery settings |
+| `/api/blacklist-check` | POST | Check sending IP against 8 DNSBL blocklists |
 
 ### Log Files
 
@@ -751,8 +830,9 @@ PORT=8080 PROXY_URL=socks5://user:pass@1.2.3.4:1080 npm start
    ```
 5. **HELO/EHLO match** — `heloHost` should match the PTR record for your sending IP
 6. **Unsubscribe link** — Set `unsubscribeBaseUrl` and include `{{unsubscribe_url}}` in body
-7. **Blacklist check** — Check your IP at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists)
-8. **Test score** — Use [mail-tester.com](https://www.mail-tester.com) to verify full deliverability stack
+7. **IP Reputation** — Use **Dashboard → IP Reputation Check → Check Now** to scan against 8 blocklists. If listed on Mailspike or Spamhaus, request delist before sending.
+8. **Blacklist check (external)** — Also verify at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists)
+9. **Test score** — Use [mail-tester.com](https://www.mail-tester.com) to verify full deliverability stack
 
 > **Split-header users:** Publish SPF, DKIM, and DMARC for the `envelopeDomain` — not for the visible `From:` domain. The envelope domain is what receiving servers authenticate.
 

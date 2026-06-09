@@ -306,6 +306,9 @@ if /i "!SETUP_PM2!"=="y" (
 
     echo  [OK] PM2 running
     echo  [OK] Commands: pm2 status ^| pm2 logs vps-sender ^| pm2 restart vps-sender
+    echo.
+    echo  [--] Auto-start on Windows reboot requires Task Scheduler or NSSM.
+    echo       Run: pm2 startup  (follow the printed instructions)
     set PM2_ACTIVE=1
     goto :after_pm2
 )

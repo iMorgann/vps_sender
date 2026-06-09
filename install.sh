@@ -459,7 +459,15 @@ if [[ "$OS" == "linux" ]]; then
         RELAY_DOMAIN="${RELAY_DOMAIN:-mail.localhost}"
 
         info "Installing Postfix..."
-        DEBIAN_FRONTEND=noninteractive apt-get install -y postfix 2>&1 | tail -5
+        if [[ "$PKG" == "apt" ]]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y postfix 2>&1 | tail -5
+        elif [[ "$PKG" == "dnf" ]]; then
+            run dnf install -y postfix 2>&1 | tail -5
+        elif [[ "$PKG" == "yum" ]]; then
+            run yum install -y postfix 2>&1 | tail -5
+        else
+            warn "Cannot auto-install Postfix — install it manually and re-run."
+        fi
 
         info "Configuring Postfix as loopback-only relay for ${RELAY_DOMAIN}..."
         postconf -e "inet_interfaces = loopback-only"

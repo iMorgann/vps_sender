@@ -1259,6 +1259,17 @@ async function startWebServer() {
         return;
       }
 
+      if (req.method === "POST" && pathname === "/api/campaign/clear-history") {
+        const { getDb } = require("./lib/campaign/state");
+        const db = getDb();
+        if (db) db.prepare("DELETE FROM campaign_results").run();
+        const csvPath = config.resultsFile || "results.csv";
+        if (fs.existsSync(csvPath)) fs.unlinkSync(csvPath);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
       // ── DKIM key generation ──────────────────────────────────────────────
       if (req.method === "POST" && pathname === "/api/dkim/generate") {
         const body     = await getJsonBody();
