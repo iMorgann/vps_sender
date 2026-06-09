@@ -436,7 +436,80 @@ else
     ok "Skipped PM2 — start manually with: npm start"
 fi
 
-# ── 11. Done ──────────────────────────────────────────────────────────────────
+# ── 11. Local MTA relay (Postfix) — Linux only, optional ─────────────────────
+if [[ "$OS" == "linux" ]]; then
+    step "11. Local MTA relay (Postfix)..."
+
+    SETUP_POSTFIX="n"
+    if [[ -t 0 ]]; then
+        echo ""
+        echo -e "  A local Postfix relay improves deliverability: the app hands mail to"
+        echo -e "  Postfix on ${BOLD}127.0.0.1:25${RESET} and Postfix handles outbound queuing, retries,"
+        echo -e "  and bounce handling. Useful when port 25 is open on this server."
+        echo ""
+        read -rp "  Install and configure Postfix as a local relay? [y/N]: " SETUP_POSTFIX
+    fi
+
+    if [[ "$SETUP_POSTFIX" =~ ^[Yy]$ ]]; then
+        RELAY_DOMAIN=""
+        if [[ -t 0 ]]; then
+            echo ""
+            read -rp "  Enter your sending domain (e.g. mail.example.com): " RELAY_DOMAIN
+        fi
+        RELAY_DOMAIN="${RELAY_DOMAIN:-mail.localhost}"
+
+        info "Installing Postfix..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y postfix 2>&1 | tail -5
+
+        info "Configuring Postfix as loopback-only relay for ${RELAY_DOMAIN}..."
+        postconf -e "inet_interfaces = loopback-only"
+        postconf -e "inet_protocols = ipv4"
+        postconf -e "mynetworks = 127.0.0.0/8"
+        postconf -e "myhostname = ${RELAY_DOMAIN}"
+        postconf -e "mydomain = ${RELAY_DOMAIN#*.}"
+        postconf -e "myorigin = \$mydomain"
+        postconf -e "relayhost ="
+        postconf -e "smtpd_banner = \$myhostname ESMTP"
+        postconf -e "smtpd_tls_security_level = may"
+        postconf -e "smtp_tls_security_level = may"
+        postconf -e "smtp_tls_note_starttls_offer = yes"
+
+        info "Enabling and restarting Postfix..."
+        systemctl enable postfix  2>/dev/null || true
+        systemctl restart postfix 2>/dev/null || \
+            service postfix restart 2>/dev/null || \
+            warn "Could not restart Postfix. Run: sudo systemctl restart postfix"
+
+        info "Updating config.json for relay mode..."
+        node -e "
+          const fs = require('fs'), p = './config.json';
+          const c  = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
+          c.transport      = 'relay';
+          c.relayHost      = '127.0.0.1';
+          c.relayPort      = 25;
+          c.relayUser      = '';
+          c.relayPass      = '';
+          c.envelopeDomain = process.argv[2];
+          c.preScanRelay   = false;
+          fs.writeFileSync(p, JSON.stringify(c, null, 2), { mode: 0o600 });
+        " -- "$RELAY_DOMAIN"
+
+        ok "Postfix installed — transport set to relay via 127.0.0.1:25 for ${RELAY_DOMAIN}"
+        info "To verify Postfix is accepting mail locally:"
+        echo -e "    ${CYAN}echo 'Test' | sendmail -v test@example.com${RESET}"
+        info "Monitor the Postfix queue with: ${CYAN}mailq${RESET}  or  ${CYAN}postqueue -p${RESET}"
+    else
+        ok "Skipped Postfix — using direct-to-MX mode"
+        info "You can switch to relay mode later in the Settings tab of the web GUI."
+    fi
+else
+    step "11. Local MTA relay..."
+    info "Postfix setup is Linux-only. On macOS, install Postfix manually or use"
+    info "the Settings tab to configure an external relay (SMTP credentials)."
+    ok "Skipped on non-Linux platform"
+fi
+
+# ── 12. Done ──────────────────────────────────────────────────────────────────
 
 # Detect public IP (best-effort, silent on failure)
 PUBLIC_IP=$(curl -fsSL --max-time 4 https://api.ipify.org 2>/dev/null \

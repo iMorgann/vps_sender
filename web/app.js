@@ -736,7 +736,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const tdScore = document.createElement("td");
           tdScore.appendChild(makeBadge(
             score >= 3 ? "success" : score >= 1 ? "warning" : "error",
-            `${score >= 3 ? "GOOD" : score >= 1 ? "WEAK" : "POOR"} (${score}/3)`
+            `${score >= 3 ? "GOOD" : score >= 1 ? "WEAK" : "POOR"} (${score}/4)`
           ));
           tr.appendChild(tdScore);
 
@@ -861,6 +861,60 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // ── Transport toggle ────────────────────────────────────────────────────────
+  function toggleRelayFields(show) {
+    document.getElementById("relay-fields").classList.toggle("hidden", !show);
+  }
+
+  document.getElementById("settings-transport").addEventListener("change", e => {
+    toggleRelayFields(e.target.value === "relay");
+  });
+
+  // ── DKIM generate ────────────────────────────────────────────────────────────
+  document.getElementById("btn-generate-dkim").addEventListener("click", async () => {
+    const domain   = document.getElementById("settings-dkim-domain").value.trim();
+    const selector = document.getElementById("settings-dkim-selector").value.trim() || "mail";
+    if (!domain) { alert("Enter a domain first."); return; }
+
+    const btn = document.getElementById("btn-generate-dkim");
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+
+    try {
+      const res  = await apiFetch("/api/dkim/generate", "POST", { domain, selector });
+      const data = await res.json();
+      if (!data.success) { alert("DKIM generation failed: " + (data.error || "unknown error")); return; }
+
+      document.getElementById("dns-spf-name").textContent  = data.dns.spf.name  + "   (TXT)";
+      document.getElementById("dns-spf-value").textContent = data.dns.spf.value;
+      document.getElementById("dns-dkim-name").textContent = data.dns.dkim.name + "   (TXT)";
+      document.getElementById("dns-dkim-value").textContent= data.dns.dkim.value;
+      document.getElementById("dns-dmarc-name").textContent= data.dns.dmarc.name + "   (TXT)";
+      document.getElementById("dns-dmarc-value").textContent = data.dns.dmarc.value;
+
+      const mtaEl = document.getElementById("dkim-mta-instructions");
+      mtaEl.textContent = "";
+      const p = document.createElement("p");
+      p.className = "form-hint";
+      if (data.os === "win32") {
+        p.textContent = `Windows (hMailServer): In hMailServer Admin, go to Domains → ${domain} → DKIM Signing, enable it, set selector to "${selector}", and paste the private key from dkim/${domain}.pem.`;
+      } else {
+        p.textContent = `Linux/Mac (Postfix): The private key was saved to dkim/${domain}.pem. Add the DKIM record to DNS, then reload Postfix: sudo postfix reload`;
+      }
+      mtaEl.appendChild(p);
+
+      document.getElementById("dkim-result").style.display = "block";
+      appendLog(`DKIM keys generated for ${domain} (selector: ${selector})`, "sent");
+      // Refresh DKIM config textarea
+      loadSettings();
+    } catch (e) {
+      alert("Error generating DKIM keys: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Generate DKIM Keys";
+    }
+  });
+
   async function loadSettings() {
     try {
       const res  = await apiFetch("/api/config");
@@ -884,6 +938,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // apiToken: never pre-fill the field; track server-side state separately
       serverTokenIsSet          = data.apiToken === "***";
       tokenFieldDirty           = false;
+      relayPassDirty            = false;
       apiTokenInput.value       = "";
       apiTokenInput.placeholder = serverTokenIsSet
         ? "Token is set — type to change, clear to remove"
@@ -893,6 +948,16 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("settings-sending-ip").value       = data.sendingIp || "auto";
       document.getElementById("settings-direct-mx").checked      = data.directToMxOnly !== false;
       document.getElementById("settings-allow-weak").checked     = data.allowWeakDomains !== false;
+
+      // Transport / relay
+      document.getElementById("settings-transport").value        = data.transport      || "direct";
+      document.getElementById("settings-relay-host").value       = data.relayHost      || "127.0.0.1";
+      document.getElementById("settings-relay-port").value       = data.relayPort      ?? 587;
+      document.getElementById("settings-relay-user").value       = data.relayUser      || "";
+      document.getElementById("settings-relay-pass").value       = "";  // never pre-fill password
+      document.getElementById("settings-prescan-relay").checked  = data.preScanRelay   !== false;
+      document.getElementById("settings-envelope-domain").value  = data.envelopeDomain || "";
+      toggleRelayFields(data.transport === "relay");
 
       // Warmup
       const warmup = data.warmup || {};
@@ -937,10 +1002,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Track whether the user has touched the token field since last load
-  let tokenFieldDirty = false;
-  let serverTokenIsSet = false;
+  // Track whether the user has touched the token / relay-pass fields since last load
+  let tokenFieldDirty    = false;
+  let relayPassDirty     = false;
+  let serverTokenIsSet   = false;
   apiTokenInput.addEventListener("input", () => { tokenFieldDirty = true; });
+  document.getElementById("settings-relay-pass").addEventListener("input", () => { relayPassDirty = true; });
 
   settingsForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -961,6 +1028,13 @@ document.addEventListener("DOMContentLoaded", () => {
       sendingIp:             document.getElementById("settings-sending-ip").value.trim() || "auto",
       directToMxOnly:        document.getElementById("settings-direct-mx").checked,
       allowWeakDomains:      document.getElementById("settings-allow-weak").checked,
+      transport:             document.getElementById("settings-transport").value,
+      relayHost:             document.getElementById("settings-relay-host").value.trim() || "127.0.0.1",
+      relayPort:             parseInt(document.getElementById("settings-relay-port").value, 10) || 587,
+      relayUser:             document.getElementById("settings-relay-user").value.trim(),
+      relayPass:             relayPassDirty ? document.getElementById("settings-relay-pass").value : "***",
+      preScanRelay:          document.getElementById("settings-prescan-relay").checked,
+      envelopeDomain:        document.getElementById("settings-envelope-domain").value.trim(),
       warmup: {
         enabled:         document.getElementById("settings-warmup-enabled").checked,
         dailyLimit:      parseInt(document.getElementById("settings-warmup-daily").value, 10)     || 100,
@@ -989,6 +1063,7 @@ document.addEventListener("DOMContentLoaded", () => {
           attachSseHandlers(eventSource);
         }
         tokenFieldDirty = false;
+        relayPassDirty  = false;
         appendLog("Configuration saved. Restart the server to apply bind/port changes.", "sent");
         alert("Configuration saved. Restart the server for bind address / port changes to take effect.");
         loadSettings();

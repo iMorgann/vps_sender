@@ -16,7 +16,10 @@
       "Bash(node --check lib/campaign/engine.js)",
       "Bash(node --check lib/mime/dkim.js)",
       "Bash(node --check lib/delivery/smtp-client.js)",
-      "Bash(node --check lib/net/proxy.js)"
+      "Bash(node --check lib/net/proxy.js)",
+      "Bash(coderabbit --version)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\" -File -Filter \"*.js\")",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

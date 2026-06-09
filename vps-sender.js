@@ -47,6 +47,13 @@ function loadConfig() {
     bindHost:              "127.0.0.1",
     port:                  3000,
     domain:                "",
+    transport:             "direct",
+    relayHost:             "127.0.0.1",
+    relayPort:             587,
+    relayUser:             "",
+    relayPass:             "",
+    envelopeDomain:        "",
+    preScanRelay:          true,
     dkim:                  {},
     rateLimits: {
       default:       { perMinute: 30, perHour: 500 },
@@ -559,7 +566,7 @@ async function runSender(smtpEntries, cfg) {
     cancelToken: token,
     onProgress:  ({ phase, sent, failed, total, current }) => {
       if (phase === "scan") return;
-      process.stdout.write(`\r  ${progressBar(sent + failed, total)}  ${dim((current || "").slice(0,24).padEnd(24))} `);
+      process.stdout.write(`\r  ${progressBar(sent + failed, total)}  ${dim((current?.recipient || "").slice(0,24).padEnd(24))} `);
     },
     onLog: (text, cls) => {
       if (cls === "sent")   process.stdout.write(`\r  ${g("✓")} ${text}\n`);
@@ -715,6 +722,7 @@ async function startWebServer() {
           uptime:    process.uptime(),
           engine:    engineState.status,
           logFile,
+          os:        process.platform,
           timestamp: new Date().toISOString(),
         }));
         return;
@@ -740,6 +748,14 @@ async function startWebServer() {
           apiToken:              config.apiToken ? "***" : "",
           sendingIp:             config.sendingIp || "auto",
           directToMxOnly:        config.directToMxOnly !== false,
+          transport:             config.transport      || "direct",
+          relayHost:             config.relayHost      || "127.0.0.1",
+          relayPort:             config.relayPort      || 587,
+          relayUser:             config.relayUser      || "",
+          relayPass:             config.relayPass      ? "***" : "",
+          envelopeDomain:        config.envelopeDomain || "",
+          preScanRelay:          config.preScanRelay   !== false,
+          os:                    process.platform,
           warmup: {
             enabled:         !!(config.warmup && config.warmup.enabled),
             dailyLimit:      (config.warmup && config.warmup.dailyLimit != null) ? config.warmup.dailyLimit : 100,
@@ -797,6 +813,29 @@ async function startWebServer() {
         }
         if (body.directToMxOnly !== undefined) {
           body.directToMxOnly = !!body.directToMxOnly;
+        }
+        if (body.transport !== undefined) {
+          body.transport = body.transport === "relay" ? "relay" : "direct";
+        }
+        if (body.relayHost !== undefined) {
+          body.relayHost = String(body.relayHost).replace(/[\r\n]/g, "").trim() || "127.0.0.1";
+        }
+        if (body.relayPort !== undefined) {
+          const rp = parseInt(body.relayPort, 10);
+          body.relayPort = Number.isFinite(rp) && rp >= 1 && rp <= 65535 ? rp : 587;
+        }
+        if (body.relayUser !== undefined) {
+          body.relayUser = String(body.relayUser).replace(/[\r\n]/g, "").trim();
+        }
+        if (body.relayPass !== undefined) {
+          if (body.relayPass === "***") delete body.relayPass;
+          else body.relayPass = String(body.relayPass);
+        }
+        if (body.envelopeDomain !== undefined) {
+          body.envelopeDomain = String(body.envelopeDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+        }
+        if (body.preScanRelay !== undefined) {
+          body.preScanRelay = !!body.preScanRelay;
         }
         if (body.allowWeakDomains !== undefined) {
           body.allowWeakDomains = !!body.allowWeakDomains;
@@ -1091,6 +1130,48 @@ async function startWebServer() {
         return;
       }
 
+      // ── DKIM key generation ──────────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/api/dkim/generate") {
+        const body     = await getJsonBody();
+        const domain   = String(body.domain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
+        if (!domain || !/^[a-z0-9][a-z0-9\-.]+\.[a-z]{2,}$/.test(domain)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid domain" }));
+          return;
+        }
+        const selector = String(body.selector || "mail").replace(/[^a-z0-9]/g, "") || "mail";
+        const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+        const privPem = privateKey.export({ type: "pkcs8", format: "pem" });
+        const pubDer  = publicKey.export({ type: "spki", format: "der" }).toString("base64").replace(/\n/g, "");
+
+        const dkimDir = path.join(__dirname, "dkim");
+        if (!fs.existsSync(dkimDir)) fs.mkdirSync(dkimDir, { mode: 0o700 });
+        fs.writeFileSync(path.join(dkimDir, `${domain}.pem`), privPem, { mode: 0o600 });
+
+        const cfg  = loadConfig();
+        const dkim = { ...(cfg.dkim || {}) };
+        dkim[domain] = { domainName: domain, keySelector: selector, privateKeyPath: `dkim/${domain}.pem` };
+        saveConfig({ dkim });
+
+        let sendingIp = "";
+        try { sendingIp = await detectSendingIp(); } catch { /* ignore */ }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success:   true,
+          domain,
+          selector,
+          publicKey: pubDer,
+          dns: {
+            spf:   { name: domain,                          type: "TXT", value: sendingIp ? `v=spf1 ip4:${sendingIp} ~all` : "v=spf1 ~all" },
+            dkim:  { name: `${selector}._domainkey.${domain}`, type: "TXT", value: `v=DKIM1; k=rsa; p=${pubDer}` },
+            dmarc: { name: `_dmarc.${domain}`,              type: "TXT", value: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}` },
+          },
+          os: process.platform,
+        }));
+        return;
+      }
+
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
     } catch (e) {
@@ -1172,8 +1253,10 @@ async function runWebScanner(emails, includeWeak, outputFile) {
 
   const passing = results.filter(d => {
     if (!d.hasMx || !d.port25Open) return false;
-    // When includeWeak is false, exclude domains with only soft/no SPF or no DMARC enforcement
-    if (!includeWeak && (d.spfStrength !== "hard" || d.dmarcPolicy === "none")) return false;
+    // When includeWeak is false, exclude domains with STRICT enforcement (hard SPF + DMARC policy).
+    // Those domains would reject mail from unauthorized IPs — only keep open/soft domains.
+    // Matches CLI behaviour: allowWeakDomains=false warns about strict-auth, doesn't include them.
+    if (!includeWeak && d.spfStrength === "hard" && d.dmarcPolicy !== "none") return false;
     return true;
   });
   const smtpEntries = passing.flatMap(d => (d.emails || []).map(email => ({ host: d.mx, fromEmail: email })));

@@ -548,6 +548,90 @@
             </div>
 
             <hr class="form-divider">
+            <h3 class="form-section-title">Transport Mode</h3>
+
+            <div class="form-group">
+              <label for="settings-transport">Delivery Mode</label>
+              <select id="settings-transport" class="form-control">
+                <option value="direct">Direct to MX — resolve &amp; connect directly (no relay)</option>
+                <option value="relay">Local MTA Relay — route via hMailServer / Postfix</option>
+              </select>
+              <small class="form-hint">Direct mode needs port 25 open. Relay mode needs a local MTA configured on port 587.</small>
+            </div>
+
+            <div class="relay-fields hidden" id="relay-fields">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="settings-relay-host">Relay Host</label>
+                  <input type="text" id="settings-relay-host" class="form-control" value="127.0.0.1">
+                </div>
+                <div class="form-group">
+                  <label for="settings-relay-port">Relay Port</label>
+                  <input type="number" id="settings-relay-port" class="form-control" value="587" min="1" max="65535">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="settings-relay-user">Relay Username</label>
+                  <input type="text" id="settings-relay-user" class="form-control" placeholder="(leave blank if no auth)">
+                </div>
+                <div class="form-group">
+                  <label for="settings-relay-pass">Relay Password</label>
+                  <input type="password" id="settings-relay-pass" class="form-control" placeholder="(leave blank if no auth)">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>
+                  <input type="checkbox" id="settings-prescan-relay" checked> Pre-scan recipient domains in relay mode
+                </label>
+                <small class="form-hint">Uncheck to skip MX port-25 pre-flight for relay mode — useful when the relay handles routing</small>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="settings-envelope-domain">Envelope Domain (split-header signing)</label>
+              <input type="text" id="settings-envelope-domain" class="form-control" placeholder="yourdomain.com (leave blank to use sender domain)">
+              <small class="form-hint">MAIL FROM uses bounce@this-domain for SPF/DKIM alignment. Header From: stays as the visible address.</small>
+            </div>
+
+            <hr class="form-divider">
+            <h3 class="form-section-title">DKIM Key Generation</h3>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="settings-dkim-domain">Domain</label>
+                <input type="text" id="settings-dkim-domain" class="form-control" placeholder="yourdomain.com">
+              </div>
+              <div class="form-group">
+                <label for="settings-dkim-selector">Selector</label>
+                <input type="text" id="settings-dkim-selector" class="form-control" value="mail">
+              </div>
+            </div>
+
+            <button type="button" id="btn-generate-dkim" class="btn btn-secondary">Generate DKIM Keys</button>
+            <small class="form-hint" style="margin-top:6px;display:block">Generates an RSA-2048 key pair, saves the private key to dkim/&lt;domain&gt;.pem, and updates config.dkim automatically.</small>
+
+            <div id="dkim-result" style="display:none;margin-top:16px">
+              <p class="form-hint" style="margin-bottom:8px">Add these DNS TXT records to your domain:</p>
+              <div class="dns-record-block" id="dns-spf-block">
+                <div class="dns-record-label">SPF</div>
+                <div class="dns-record-name" id="dns-spf-name"></div>
+                <div id="dns-spf-value"></div>
+              </div>
+              <div class="dns-record-block" id="dns-dkim-block">
+                <div class="dns-record-label">DKIM</div>
+                <div class="dns-record-name" id="dns-dkim-name"></div>
+                <div id="dns-dkim-value" style="word-break:break-all"></div>
+              </div>
+              <div class="dns-record-block" id="dns-dmarc-block">
+                <div class="dns-record-label">DMARC</div>
+                <div class="dns-record-name" id="dns-dmarc-name"></div>
+                <div id="dns-dmarc-value"></div>
+              </div>
+              <div id="dkim-mta-instructions" style="margin-top:12px"></div>
+            </div>
+
+            <hr class="form-divider">
             <h3 class="form-section-title">Rate Limits</h3>
 
             <div class="form-group">

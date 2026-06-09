@@ -21,9 +21,9 @@ test("toPlainText: strips HTML tags", () => {
   assert.ok(!text.includes("<"));
 });
 
-test("buildMime: produces a valid MIME buffer with Message-ID and List-Unsubscribe", async () => {
-  const { buildMime } = require("../lib/mime/builder");
-  const buf = await buildMime({
+test("buildMailOptions: returns object with Message-ID, List-Unsubscribe, and body content", () => {
+  const { buildMailOptions } = require("../lib/mime/builder");
+  const opts = buildMailOptions({
     to:        "test@example.com",
     fromEmail: "sender@domain.com",
     fromName:  "Test Sender",
@@ -31,9 +31,10 @@ test("buildMime: produces a valid MIME buffer with Message-ID and List-Unsubscri
     html:      "<p>Hello</p>",
     config:    { unsubscribeBaseUrl: "https://example.com/unsub" },
   });
-  const raw = buf.toString("utf8");
-  assert.ok(raw.includes("Message-ID:"), "should have Message-ID header");
-  assert.ok(raw.includes("List-Unsubscribe:"), "should have List-Unsubscribe header");
-  assert.ok(raw.includes("Precedence: bulk"), "should have Precedence header");
-  assert.ok(raw.includes("Hello"), "should include body content");
+  assert.ok(opts.headers["Message-ID"],         "should have Message-ID header");
+  assert.ok(opts.headers["List-Unsubscribe"],   "should have List-Unsubscribe header");
+  assert.equal(opts.headers["Precedence"], "bulk", "should have Precedence: bulk");
+  assert.ok(opts.html.includes("Hello"),        "should include body content");
+  assert.equal(opts.to,   "test@example.com");
+  assert.ok(opts.from.includes("sender@domain.com"));
 });

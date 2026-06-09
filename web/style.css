@@ -1,20 +1,20 @@
 /* ── VPS Sender Style Sheet ────────────────────────────────────────────────── */
 
 :root {
-  --bg-app: #080c14;
-  --bg-sidebar: #0f1524;
-  --bg-panel: rgba(17, 24, 39, 0.7);
-  --bg-panel-solid: #111827;
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-color-hover: rgba(255, 255, 255, 0.15);
+  --bg-app: #080010;
+  --bg-sidebar: #0e0018;
+  --bg-panel: rgba(20, 0, 35, 0.8);
+  --bg-panel-solid: #110020;
+  --border-color: rgba(168, 85, 247, 0.18);
+  --border-color-hover: rgba(168, 85, 247, 0.3);
   --text-main: #f3f4f6;
   --text-muted: #9ca3af;
   --text-dim: #6b7280;
   
   /* Accent Colors */
-  --primary: #00f2fe;
-  --primary-glow: rgba(0, 242, 254, 0.3);
-  --primary-grad: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  --primary: #a855f7;
+  --primary-glow: rgba(168, 85, 247, 0.35);
+  --primary-grad: linear-gradient(135deg, #9333ea 0%, #a855f7 100%);
   --secondary: #4b5563;
   
   --success: #10b981;
@@ -29,8 +29,8 @@
   --warning-glow: rgba(245, 158, 11, 0.25);
   --warning-bg: rgba(245, 158, 11, 0.1);
   
-  --blue: #3b82f6;
-  --blue-bg: rgba(59, 130, 246, 0.1);
+  --blue: #7c3aed;
+  --blue-bg: rgba(124, 58, 237, 0.08);
   
   --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --radius: 12px;
@@ -44,7 +44,10 @@
 
 body {
   font-family: 'Outfit', sans-serif;
-  background-color: var(--bg-app);
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(120, 40, 200, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 80%, rgba(80, 0, 160, 0.12) 0%, transparent 55%),
+    var(--bg-app);
   color: var(--text-main);
   overflow: hidden;
   height: 100vh;
@@ -62,8 +65,8 @@ body {
 /* Sidebar */
 .sidebar {
   width: 260px;
-  background-color: var(--bg-sidebar);
-  border-right: 1px solid var(--border-color);
+  background: linear-gradient(180deg, #0e0018 0%, #0a0015 100%);
+  border-right: 1px solid rgba(168, 85, 247, 0.15);
   display: flex;
   flex-direction: column;
   padding: 24px 16px;
@@ -126,10 +129,10 @@ body {
 }
 
 .nav-item.active {
-  color: #fff;
-  background-color: rgba(0, 242, 254, 0.08);
-  border-color: rgba(0, 242, 254, 0.25);
-  box-shadow: inset 0 0 12px rgba(0, 242, 254, 0.05);
+  color: #a855f7;
+  background-color: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.35);
+  box-shadow: inset 0 0 12px rgba(168, 85, 247, 0.08);
 }
 
 .nav-item .icon {
@@ -149,10 +152,10 @@ body {
 }
 
 .engine-status-badge.idle { border-color: var(--border-color); color: var(--text-muted); }
-.engine-status-badge.scanning { border-color: rgba(59, 130, 246, 0.4); color: var(--blue); }
+.engine-status-badge.scanning { border-color: rgba(168, 85, 247, 0.4); color: var(--primary); }
 .engine-status-badge.sending { border-color: rgba(16, 185, 129, 0.4); color: var(--success); }
 .engine-status-badge.paused { border-color: rgba(245, 158, 11, 0.4); color: var(--warning); }
-.engine-status-badge.done { border-color: rgba(0, 242, 254, 0.4); color: var(--primary); }
+.engine-status-badge.done { border-color: rgba(168, 85, 247, 0.4); color: var(--primary); }
 
 .pulse {
   width: 8px;
@@ -413,8 +416,8 @@ body {
 
 .terminal {
   flex-grow: 1;
-  background-color: #04060b;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background-color: rgba(10, 0, 20, 0.92);
+  border: 1px solid rgba(168, 85, 247, 0.12);
   border-radius: 8px;
   padding: 16px;
   font-family: 'JetBrains Mono', monospace;
@@ -432,7 +435,7 @@ body {
 .terminal-line.sent { color: #34d399; }
 .terminal-line.fail { color: #f43f5e; }
 .terminal-line.warn { color: #fbbf24; }
-.terminal-line.system { color: #60a5fa; opacity: 0.85; }
+.terminal-line.system { color: rgba(168, 85, 247, 0.85); }
 .terminal-line.dim { color: #4b5563; }
 
 .side-panel-group {
@@ -480,7 +483,7 @@ body {
 }
 
 .text-glow {
-  text-shadow: 0 0 8px rgba(0, 242, 254, 0.4);
+  text-shadow: 0 0 8px rgba(168, 85, 247, 0.5);
 }
 
 .chart-panel {
@@ -543,8 +546,8 @@ body {
 }
 
 .form-control:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 10px rgba(0, 242, 254, 0.15);
+  border-color: rgba(168, 85, 247, 0.6);
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.12);
   background-color: rgba(255, 255, 255, 0.05);
 }
 
@@ -618,7 +621,7 @@ body {
 
 .btn-primary {
   background: var(--primary-grad);
-  color: #04060b;
+  color: #ffffff;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -719,7 +722,7 @@ body {
 }
 
 .file-list-item.active {
-  background-color: rgba(0, 242, 254, 0.05);
+  background-color: rgba(168, 85, 247, 0.08);
   color: var(--primary);
   font-weight: 500;
 }
@@ -739,8 +742,8 @@ body {
 
 .code-editor {
   flex-grow: 1;
-  background-color: #04060b;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background-color: rgba(10, 0, 20, 0.92);
+  border: 1px solid rgba(168, 85, 247, 0.1);
   border-radius: 8px;
   padding: 16px;
   font-family: 'JetBrains Mono', monospace;
@@ -753,7 +756,7 @@ body {
 }
 
 .code-editor:focus {
-  border-color: rgba(0, 242, 254, 0.3);
+  border-color: rgba(168, 85, 247, 0.4);
 }
 
 /* ── SMTP Scanner Tab ──────────────────────────────────────────────────────── */
@@ -793,7 +796,7 @@ body {
 .badge.success { background-color: var(--success-bg); border-color: rgba(16, 185, 129, 0.2); color: var(--success); }
 .badge.error { background-color: var(--error-bg); border-color: rgba(244, 63, 94, 0.2); color: var(--error); }
 .badge.warning { background-color: var(--warning-bg); border-color: rgba(245, 158, 11, 0.2); color: var(--warning); }
-.badge.info { background-color: var(--blue-bg); border-color: rgba(59, 130, 246, 0.2); color: var(--blue); }
+.badge.info { background-color: var(--blue-bg); border-color: rgba(124, 58, 237, 0.25); color: var(--blue); }
 
 .table-container {
   flex-grow: 1;
@@ -896,11 +899,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(168, 85, 247, 0.3);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(168, 85, 247, 0.5);
 }
 
 /* ── File Manager Toolbar ─────────────────────────────────────────────────── */
@@ -941,7 +944,7 @@ body {
 .drop-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 242, 254, 0.08);
+  background: rgba(168, 85, 247, 0.08);
   border: 2px dashed var(--primary);
   border-radius: var(--radius);
   display: flex;
@@ -1000,11 +1003,14 @@ body {
 }
 
 .form-section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-family: 'Outfit', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--primary);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid rgba(168, 85, 247, 0.2);
+  padding-bottom: 6px;
   margin-bottom: 16px;
 }
 
@@ -1023,9 +1029,44 @@ body {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  background: rgba(0, 242, 254, 0.04);
-  border: 1px solid rgba(0, 242, 254, 0.15);
+  background: rgba(168, 85, 247, 0.04);
+  border: 1px solid rgba(168, 85, 247, 0.15);
   border-radius: 8px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
 }
+
+/* ── DKIM / DNS record blocks ─────────────────────────────────────────────── */
+
+.dns-record-block {
+  background: rgba(10, 0, 20, 0.92);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-main);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.dns-record-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.dns-record-name {
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.relay-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.relay-fields.hidden { display: none; }

@@ -315,7 +315,70 @@ echo  [OK] Skipped PM2
 
 :after_pm2
 
-:: ── 11. Determine the URL to display ────────────────────────────
+:: ── 11. Local MTA relay (hMailServer guidance) ───────────────────
+echo.
+echo  ============================================================
+echo   Step 11: Local MTA Relay (hMailServer)
+echo  ============================================================
+echo.
+echo  A local hMailServer relay improves deliverability:
+echo  vps-sender hands mail to hMailServer on 127.0.0.1:587 and
+echo  hMailServer handles outbound delivery, queuing, and retries.
+echo.
+
+set /p SETUP_HMAILS= Setup hMailServer relay now? (auto-config config.json) [y/N]:
+
+if /i "!SETUP_HMAILS!"=="y" (
+    set /p RELAY_DOMAIN= Enter your sending domain (e.g. mail.example.com):
+    if "!RELAY_DOMAIN!"=="" set RELAY_DOMAIN=mail.localhost
+
+    echo.
+    echo  [INFO] hMailServer cannot be installed silently.
+    echo         Follow these manual steps, then press Enter to continue.
+    echo.
+    echo  --- hMailServer Setup Instructions -------------------------
+    echo.
+    echo  1. Download hMailServer (free, open-source):
+    echo     https://www.hmailserver.com/download
+    echo.
+    echo  2. Run the installer and choose:
+    echo     - Installation type: Server
+    echo     - Database: Built-in (MSSQL Compact / SQLite)
+    echo     - Set a strong administrator password
+    echo.
+    echo  3. Open hMailServer Administrator, then:
+    echo     a. Add a domain:  Domains -^> Add  (use !RELAY_DOMAIN!)
+    echo     b. Add an account under that domain (e.g. bounce@!RELAY_DOMAIN!)
+    echo     c. Settings -^> Advanced -^> IP Ranges:
+    echo        Add "Loopback" (127.0.0.1 to 127.0.0.1)
+    echo        Enable "Allow SMTP relay" for this range
+    echo     d. Settings -^> Protocols -^> SMTP -^> Delivery:
+    echo        Set "localhost" as the HELO host
+    echo.
+    echo  4. DKIM signing (for best deliverability):
+    echo     - In the web GUI Settings tab, click "Generate DKIM Key"
+    echo       for domain !RELAY_DOMAIN!
+    echo     - Copy the private key content to hMailServer Admin:
+    echo       Domains -^> !RELAY_DOMAIN! -^> DKIM Signing
+    echo       Enable signing, set selector to "default", paste the key
+    echo.
+    echo  5. Add required DNS records shown in the web GUI Settings tab:
+    echo     SPF, DKIM TXT, and DMARC records for !RELAY_DOMAIN!
+    echo.
+    echo  --- End of Instructions -------------------------------------
+    echo.
+    pause
+
+    echo.
+    echo  [--] Updating config.json for hMailServer relay...
+    node -e "const fs=require('fs'),p='./config.json';const c=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,'utf8')):{};c.transport='relay';c.relayHost='127.0.0.1';c.relayPort=587;c.relayUser='';c.relayPass='';c.envelopeDomain=process.argv[2];c.preScanRelay=false;fs.writeFileSync(p,JSON.stringify(c,null,2));" -- "!RELAY_DOMAIN!"
+    echo  [OK] config.json updated: transport=relay, relay=127.0.0.1:587, domain=!RELAY_DOMAIN!
+) else (
+    echo  [OK] Skipped hMailServer — using direct-to-MX mode
+    echo  [--] Switch to relay mode later in Settings tab of the web GUI.
+)
+
+:: ── 12. Determine the URL to display ────────────────────────────
 set GUI_URL=http://localhost:3000
 set PORT_VAL=3000
 
