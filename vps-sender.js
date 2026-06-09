@@ -66,6 +66,7 @@ function loadConfig() {
     relayUser:                  "",
     relayPass:                  "",
     relayTlsRejectUnauthorized: false,
+    relayFromEmail:             "",
     envelopeDomain:             "",
     panelDomain:                "",
     dynamicFromDomain:          "",
@@ -787,6 +788,7 @@ async function startWebServer() {
           envelopeDomain:             config.envelopeDomain             || "",
           preScanRelay:               config.preScanRelay               !== false,
           relayTlsRejectUnauthorized: !!config.relayTlsRejectUnauthorized,
+          relayFromEmail:             config.relayFromEmail             || "",
           panelDomain:                config.panelDomain                || "",
           dynamicFromDomain:          config.dynamicFromDomain          || "",
           os:                         process.platform,
@@ -873,6 +875,9 @@ async function startWebServer() {
         }
         if (body.relayTlsRejectUnauthorized !== undefined) {
           body.relayTlsRejectUnauthorized = !!body.relayTlsRejectUnauthorized;
+        }
+        if (body.relayFromEmail !== undefined) {
+          body.relayFromEmail = String(body.relayFromEmail).replace(/[\r\n]/g, "").trim();
         }
         if (body.preScanRelay !== undefined) {
           body.preScanRelay = !!body.preScanRelay;
@@ -1231,6 +1236,7 @@ async function startWebServer() {
             relayUser:                cfg.relayUser || "",
             relayPass:                cfg.relayPass || "",
             relayTlsRejectUnauthorized: cfg.relayTlsRejectUnauthorized ?? false,
+            relayFromEmail:           cfg.relayFromEmail || "",
           });
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true, tls: result.tls, from: fromEmail, to: toAddr }));

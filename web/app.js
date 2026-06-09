@@ -1814,6 +1814,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("settings-relay-pass").value       = "";  // never pre-fill password
       document.getElementById("settings-prescan-relay").checked      = data.preScanRelay             !== false;
       document.getElementById("settings-relay-tls-reject").checked  = !!data.relayTlsRejectUnauthorized;
+      document.getElementById("settings-relay-from-email").value   = data.relayFromEmail || "";
       document.getElementById("settings-envelope-domain").value     = data.envelopeDomain            || "";
       document.getElementById("settings-panel-domain").value        = data.panelDomain               || "";
       toggleRelayFields(data.transport === "relay");
@@ -1893,6 +1894,7 @@ document.addEventListener("DOMContentLoaded", () => {
       relayPass:                  relayPassDirty ? document.getElementById("settings-relay-pass").value : "***",
       preScanRelay:               document.getElementById("settings-prescan-relay").checked,
       relayTlsRejectUnauthorized: document.getElementById("settings-relay-tls-reject").checked,
+      relayFromEmail:             document.getElementById("settings-relay-from-email").value.trim(),
       envelopeDomain:             document.getElementById("settings-envelope-domain").value.trim(),
       panelDomain:                document.getElementById("settings-panel-domain").value.trim(),
       warmup: {

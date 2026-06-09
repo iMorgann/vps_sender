@@ -785,6 +785,11 @@
                   </div>
                 </div>
                 <div class="form-group">
+                  <label for="settings-relay-from-email">Relay From Email <span class="badge warning" style="font-size:10px;vertical-align:middle">envelope sender</span></label>
+                  <input type="email" id="settings-relay-from-email" class="form-control" placeholder="zettasendtest@assistrightly.com">
+                  <small class="form-hint">Override the SMTP envelope MAIL FROM with this address. Required when the relay (e.g. Mailcow) enforces that the sender matches the authenticated account. The display From: header in the email is unchanged.</small>
+                </div>
+                <div class="form-group">
                   <label>
                     <input type="checkbox" id="settings-prescan-relay" checked> Pre-scan recipient domains in relay mode
                   </label>
