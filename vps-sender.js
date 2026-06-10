@@ -1200,7 +1200,7 @@ async function startWebServer() {
         }
         const cfg = getCachedConfig();
         const { getTransport } = require("./lib/delivery/transport");
-        const { buildMailOptions } = require("./lib/mime/builder");
+        const { buildMailOptions, randomLocalPart } = require("./lib/mime/builder");
         const deliver = getTransport(cfg);
 
         let smtpEntry = null;
@@ -1210,9 +1210,13 @@ async function startWebServer() {
             if (entries.length) smtpEntry = entries[0];
           } catch { /* fall through */ }
         }
-        const fromEmail = smtpEntry
-          ? (smtpEntry.fromEmail || smtpEntry.fromemail || `test@${cfg.domain || "localhost"}`)
-          : `test@${cfg.domain || "localhost"}`;
+        const fallbackDomain = cfg.heloHost || cfg.domain || "example.com";
+        const smtpFrom = smtpEntry ? (smtpEntry.fromEmail || smtpEntry.fromemail || `test@${fallbackDomain}`) : `test@${fallbackDomain}`;
+        const fromEmail = webCampaignConfig.fromEmailOverride
+          ? webCampaignConfig.fromEmailOverride
+          : webCampaignConfig.dynamicFromDomain
+            ? `${randomLocalPart()}@${webCampaignConfig.dynamicFromDomain}`
+            : smtpFrom;
 
         let mime;
         try {
