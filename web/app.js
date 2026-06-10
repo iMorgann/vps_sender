@@ -227,6 +227,22 @@ document.addEventListener("DOMContentLoaded", () => {
       selectDefaultOption(smtpSelect, "smtp.txt");
       selectDefaultOption(scanSrcSelect, "mxemails.txt");
 
+      // Restore wizard text inputs from server state
+      const wiz = data.campaignWizard || {};
+      const nameOverrideEl = document.getElementById("wizard-from-name-override");
+      const replyToEl      = document.getElementById("wizard-reply-to");
+      if (nameOverrideEl && wiz.fromNameOverride) nameOverrideEl.value = wiz.fromNameOverride;
+      if (replyToEl      && wiz.replyTo)          replyToEl.value      = wiz.replyTo;
+      if (wiz.fromEmailOverride) {
+        document.getElementById("from-mode-fixed")?.click();
+        const fixedEl = document.getElementById("wizard-fixed-from-email");
+        if (fixedEl) fixedEl.value = wiz.fromEmailOverride;
+      } else if (wiz.dynamicFromDomain) {
+        document.getElementById("from-mode-dynamic")?.click();
+        const dynEl = document.getElementById("wizard-dynamic-from-domain");
+        if (dynEl) dynEl.value = wiz.dynamicFromDomain;
+      }
+
       if (bodiesContainer.children.length === 0) {
         bodiesContainer.innerHTML = `<span class="text-dim text-center">No HTML templates found. Copy templates into workspace.</span>`;
       }
@@ -271,26 +287,40 @@ document.addEventListener("DOMContentLoaded", () => {
     const senderEl = document.getElementById("preview-sender-value");
     if (!fromEl || !senderEl) return;
 
+    const displayName = document.getElementById("wizard-from-name-override")?.value.trim() || "";
+    const namePrefix  = displayName ? `"${displayName}" ` : "";
+
     if (mode === "fixed") {
       const val = document.getElementById("wizard-fixed-from-email")?.value.trim() || "";
-      fromEl.textContent = val || "sender@yourdomain.com";
+      fromEl.textContent = val ? `${namePrefix}<${val}>` : `${namePrefix}<sender@yourdomain.com>`;
       fromEl.className   = "sender-preview-value" + (val ? "" : " text-dim");
     } else if (mode === "dynamic") {
       const domain = document.getElementById("wizard-dynamic-from-domain")?.value.trim() || "";
-      fromEl.textContent = domain ? `j.smith47@${domain}` : "j.smith47@yourdomain.com  (unique per recipient)";
+      const addr   = domain ? `j.smith47@${domain}` : "j.smith47@yourdomain.com";
+      fromEl.textContent = `${namePrefix}<${addr}>`;
       fromEl.className   = "sender-preview-value text-dim";
     } else {
-      fromEl.textContent = "fromEmail from SMTP file  (rotated per send)";
+      fromEl.textContent = namePrefix ? `${namePrefix}<fromEmail from SMTP file>` : "fromEmail from SMTP file  (rotated per send)";
       fromEl.className   = "sender-preview-value text-dim";
     }
 
     const relayFrom = document.getElementById("settings-relay-from-email")?.value.trim() || "";
     senderEl.textContent = relayFrom || "not set — configure in Settings → Transport & Relay";
     senderEl.className   = "sender-preview-value" + (relayFrom ? "" : " text-dim");
+
+    const replyTo    = document.getElementById("wizard-reply-to")?.value.trim() || "";
+    const rtRow      = document.getElementById("preview-replyto-row");
+    const rtVal      = document.getElementById("preview-replyto-value");
+    if (rtRow && rtVal) {
+      rtRow.style.display = replyTo ? "" : "none";
+      rtVal.textContent   = replyTo;
+    }
   }
 
   document.getElementById("wizard-fixed-from-email")?.addEventListener("input", updateSenderPreview);
   document.getElementById("wizard-dynamic-from-domain")?.addEventListener("input", updateSenderPreview);
+  document.getElementById("wizard-from-name-override")?.addEventListener("input", updateSenderPreview);
+  document.getElementById("wizard-reply-to")?.addEventListener("input", updateSenderPreview);
 
   wizardForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -319,6 +349,8 @@ document.addEventListener("DOMContentLoaded", () => {
       fromEmailOverride: fromMode === "fixed"
         ? (document.getElementById("wizard-fixed-from-email").value.trim() || "")
         : "",
+      fromNameOverride: document.getElementById("wizard-from-name-override").value.trim(),
+      replyTo:          document.getElementById("wizard-reply-to").value.trim(),
     };
 
     try {

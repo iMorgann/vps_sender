@@ -953,7 +953,16 @@ async function startWebServer() {
                                      return { name: e.name, size: stat.size };
                                    });
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ files: textFiles, attachments: binaryFiles }));
+        res.end(JSON.stringify({
+          files: textFiles,
+          attachments: binaryFiles,
+          campaignWizard: {
+            fromNameOverride: webCampaignConfig.fromNameOverride || "",
+            replyTo:          webCampaignConfig.replyTo          || "",
+            fromEmailOverride: webCampaignConfig.fromEmailOverride || "",
+            dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "",
+          },
+        }));
         return;
       }
 
@@ -1133,6 +1142,8 @@ async function startWebServer() {
         if (body.domainRotation    !== undefined) safe.domainRotation    = !!body.domainRotation;
         if (body.dynamicFromDomain !== undefined) safe.dynamicFromDomain = String(body.dynamicFromDomain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
         if (body.fromEmailOverride !== undefined) safe.fromEmailOverride = String(body.fromEmailOverride || "").replace(/[\r\n]/g, "").trim();
+        if (body.fromNameOverride  !== undefined) safe.fromNameOverride  = String(body.fromNameOverride  || "").replace(/[\r\n"\\]/g, "").trim();
+        if (body.replyTo           !== undefined) safe.replyTo           = String(body.replyTo           || "").replace(/[\r\n]/g, "").trim();
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1614,6 +1625,8 @@ let webCampaignConfig = {
   domainRotation:    false,
   dynamicFromDomain: "",
   fromEmailOverride: "",
+  fromNameOverride:  "",
+  replyTo:           "",
 };
 
 async function runWebScanner(emails, includeWeak, outputFile) {
@@ -1725,7 +1738,7 @@ async function runWebCampaign() {
     attachments,
     allEmails,
     domainPool,
-    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", _proxy: PROXY },
+    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", fromNameOverride: webCampaignConfig.fromNameOverride || "", replyTo: webCampaignConfig.replyTo || "", _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,
     onProgress: s => {

@@ -251,9 +251,9 @@
                 <small class="form-hint">List of destination emails (.txt / .csv)</small>
               </div>
               <div class="form-group">
-                <label for="wizard-names-file">Display Names File</label>
-                <select id="wizard-names-file" class="form-control" title="Sender display names — rotated round-robin per recipient"></select>
-                <small class="form-hint">Displays names for SMTP rotation (.txt)</small>
+                <label for="wizard-from-name-override">Display Name</label>
+                <input type="text" id="wizard-from-name-override" class="form-control" placeholder="e.g. Zetta Sends, John Smith" title="Sender display name shown to recipients — overrides the names file when set">
+                <small class="form-hint">Shown as the sender name. Leave blank to rotate from the names file.</small>
               </div>
             </div>
 
@@ -349,6 +349,19 @@
               </div>
             </div>
 
+            <div class="form-row">
+              <div class="form-group">
+                <label for="wizard-reply-to">Reply-To Email</label>
+                <input type="email" id="wizard-reply-to" class="form-control" placeholder="replies@yourdomain.com" title="When recipients hit Reply, their email goes here instead of the From address. Leave blank to use the From address.">
+                <small class="form-hint">Route replies to a different address (optional)</small>
+              </div>
+              <div class="form-group">
+                <label for="wizard-names-file">Display Names File</label>
+                <select id="wizard-names-file" class="form-control" title="Sender display names — rotated round-robin per recipient (used when Display Name field above is blank)"></select>
+                <small class="form-hint">Fallback name rotation when Display Name is blank</small>
+              </div>
+            </div>
+
             <!-- Sender preview summary -->
             <div class="sender-preview-box" id="sender-preview-box">
               <div class="sender-preview-title">Sender Preview</div>
@@ -359,6 +372,10 @@
               <div class="sender-preview-row">
                 <span class="sender-preview-label">Sender:</span>
                 <span class="sender-preview-value" id="preview-sender-value">—</span>
+              </div>
+              <div class="sender-preview-row" id="preview-replyto-row" style="display:none">
+                <span class="sender-preview-label">Reply-To:</span>
+                <span class="sender-preview-value" id="preview-replyto-value">—</span>
               </div>
             </div>
 
