@@ -1270,6 +1270,83 @@ async function startWebServer() {
         return;
       }
 
+      // ── Postfix mail queue ───────────────────────────────────────────────
+      if (req.method === "GET" && pathname === "/api/postfix/queue") {
+        const { execFile } = require("child_process");
+        execFile("postqueue", ["-j"], (err, stdout) => {
+          if (err) {
+            // postqueue -j unavailable — fall back to mailq text
+            execFile("mailq", [], (err2, stdout2) => {
+              if (err2) {
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ queue: [], error: err2.code === "ENOENT" ? "Postfix not installed or not in PATH" : err2.message }));
+                return;
+              }
+              // Parse minimal info from mailq text: queue is empty or has entries
+              const empty = /Mail queue is empty/i.test(stdout2);
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ queue: [], rawText: empty ? "" : stdout2.trim(), count: empty ? 0 : -1 }));
+            });
+            return;
+          }
+          const lines = stdout.trim().split("\n").filter(Boolean);
+          const queue = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ queue, count: queue.length }));
+        });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/postfix/flush") {
+        const { execFile } = require("child_process");
+        execFile("postqueue", ["-f"], (err) => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: !err, error: err ? err.message : null }));
+        });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/postfix/logs") {
+        const logCandidates = ["/var/log/mail.log", "/var/log/maillog"];
+        let lines = [];
+        for (const lp of logCandidates) {
+          if (fs.existsSync(lp)) {
+            try {
+              const data = fs.readFileSync(lp, "utf8");
+              lines = data.split("\n").filter(Boolean).slice(-200);
+              break;
+            } catch { /* permission denied — try journalctl */ }
+          }
+        }
+        if (lines.length === 0) {
+          const { execFile } = require("child_process");
+          try {
+            await new Promise((resolve) => {
+              execFile("journalctl", ["-u", "postfix", "-n", "200", "--no-pager", "--output=cat"], (err, stdout) => {
+                if (!err) lines = stdout.split("\n").filter(Boolean);
+                resolve();
+              });
+            });
+          } catch { /* ignore */ }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ lines, count: lines.length }));
+        return;
+      }
+
+      {
+        const queueDelMatch = pathname.match(/^\/api\/postfix\/queue\/([A-Za-z0-9]{8,20})$/);
+        if (req.method === "DELETE" && queueDelMatch) {
+          const qid = queueDelMatch[1];
+          const { execFile } = require("child_process");
+          execFile("postsuper", ["-d", qid], (err) => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: !err, error: err ? err.message : null }));
+          });
+          return;
+        }
+      }
+
       // ── DKIM key generation ──────────────────────────────────────────────
       if (req.method === "POST" && pathname === "/api/dkim/generate") {
         const body     = await getJsonBody();

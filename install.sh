@@ -482,6 +482,77 @@ if [[ "$OS" == "linux" ]]; then
         postconf -e "smtp_tls_security_level = may"
         postconf -e "smtp_tls_note_starttls_offer = yes"
 
+        # ── Enable submission port (587) in master.cf ─────────────────────
+        info "Enabling submission port (587) in master.cf..."
+        if ! grep -qE "^submission " /etc/postfix/master.cf 2>/dev/null; then
+            cat >> /etc/postfix/master.cf << 'MASTEREOF'
+
+# Submission (587) for vps-sender local relay — loopback only, no SASL needed
+submission inet n       -       y       -       -       smtpd
+  -o syslog_name=postfix/submission
+  -o smtpd_tls_security_level=none
+  -o smtpd_relay_restrictions=permit_mynetworks,reject
+MASTEREOF
+            ok "Submission (port 587) added to master.cf"
+        else
+            ok "Submission port already configured in master.cf"
+        fi
+
+        # ── Optional TLS cert + SMTPS (port 465) ──────────────────────────
+        SETUP_CERT="n"
+        if [[ -t 0 ]] && [[ "$RELAY_DOMAIN" != "mail.localhost" ]]; then
+            echo ""
+            echo -e "  A TLS certificate enables encrypted SMTPS (port 465) — optional."
+            echo -e "  ${YELLOW}Port 80 must be open to the internet for Let's Encrypt HTTP-01 challenge.${RESET}"
+            read -rp "  Get a free TLS certificate for ${RELAY_DOMAIN}? [y/N]: " SETUP_CERT
+        fi
+
+        CERT_PATH=""
+        KEY_PATH=""
+
+        if [[ "$SETUP_CERT" =~ ^[Yy]$ ]]; then
+            info "Installing certbot..."
+            if   [[ "$PKG" == "apt" ]]; then DEBIAN_FRONTEND=noninteractive apt-get install -y certbot 2>&1 | tail -3
+            elif [[ "$PKG" == "dnf" ]]; then dnf install -y certbot 2>&1 | tail -3
+            elif [[ "$PKG" == "yum" ]]; then yum install -y certbot 2>&1 | tail -3
+            else warn "Cannot auto-install certbot — install it manually."; fi
+
+            if command -v certbot &>/dev/null; then
+                info "Requesting Let's Encrypt certificate for ${RELAY_DOMAIN}..."
+                certbot certonly --standalone -d "${RELAY_DOMAIN}" \
+                    --non-interactive --agree-tos \
+                    -m "admin@${RELAY_DOMAIN#*.}" 2>&1 | tail -10 \
+                    || warn "certbot failed — ensure port 80 is accessible and DNS points here"
+                LIVE_DIR="/etc/letsencrypt/live/${RELAY_DOMAIN}"
+                if [[ -f "${LIVE_DIR}/fullchain.pem" ]]; then
+                    CERT_PATH="${LIVE_DIR}/fullchain.pem"
+                    KEY_PATH="${LIVE_DIR}/privkey.pem"
+                    ok "Certificate obtained: ${CERT_PATH}"
+                else
+                    warn "Certificate not found — SMTPS (465) will not be configured"
+                fi
+            else
+                warn "certbot not available — skipping TLS setup"
+            fi
+        fi
+
+        if [[ -n "$CERT_PATH" ]]; then
+            postconf -e "smtpd_tls_cert_file = ${CERT_PATH}"
+            postconf -e "smtpd_tls_key_file  = ${KEY_PATH}"
+            postconf -e "smtpd_tls_security_level = may"
+            if ! grep -qE "^smtps " /etc/postfix/master.cf 2>/dev/null; then
+                cat >> /etc/postfix/master.cf << 'MASTEREOF'
+
+# SMTPS (465) — TLS wrapper mode, loopback only
+smtps     inet  n       -       y       -       -       smtpd
+  -o syslog_name=postfix/smtps
+  -o smtpd_tls_wrappermode=yes
+  -o smtpd_relay_restrictions=permit_mynetworks,reject
+MASTEREOF
+            fi
+            ok "SMTPS (port 465) enabled with TLS certificate"
+        fi
+
         info "Enabling and restarting Postfix..."
         systemctl enable postfix  2>/dev/null || true
         systemctl restart postfix 2>/dev/null || \
@@ -494,7 +565,7 @@ if [[ "$OS" == "linux" ]]; then
           const c  = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
           c.transport      = 'relay';
           c.relayHost      = '127.0.0.1';
-          c.relayPort      = 25;
+          c.relayPort      = 587;
           c.relayUser      = '';
           c.relayPass      = '';
           c.envelopeDomain = process.argv[2];
@@ -502,7 +573,8 @@ if [[ "$OS" == "linux" ]]; then
           fs.writeFileSync(p, JSON.stringify(c, null, 2), { mode: 0o600 });
         " -- "$RELAY_DOMAIN"
 
-        ok "Postfix installed — transport set to relay via 127.0.0.1:25 for ${RELAY_DOMAIN}"
+        ok "Postfix installed — relay via 127.0.0.1:587 (submission) for ${RELAY_DOMAIN}"
+        [[ -n "$CERT_PATH" ]] && ok "SMTPS port 465 also enabled with TLS"
         info "To verify Postfix is accepting mail locally:"
         echo -e "    ${CYAN}echo 'Test' | sendmail -v test@example.com${RESET}"
         info "Monitor the Postfix queue with: ${CYAN}mailq${RESET}  or  ${CYAN}postqueue -p${RESET}"

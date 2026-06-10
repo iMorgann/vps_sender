@@ -2190,6 +2190,198 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ── Postfix Mail Queue ──────────────────────────────────────────────────────
+  const postfixQueueContent = document.getElementById("postfix-queue-content");
+  const postfixLogsContent  = document.getElementById("postfix-logs-content");
+
+  async function loadPostfixQueue() {
+    if (!postfixQueueContent) return;
+    postfixQueueContent.textContent = "Loading queue…";
+    try {
+      const res  = await apiFetch("/api/postfix/queue", "GET");
+      const data = await res.json();
+      postfixQueueContent.replaceChildren();
+      renderPostfixQueue(data);
+    } catch (err) {
+      postfixQueueContent.textContent = "Error: " + err.message;
+    }
+  }
+
+  function renderPostfixQueue(data) {
+    if (data.error && !data.queue?.length) {
+      const p = document.createElement("p");
+      p.className = "form-hint queue-error";
+      p.textContent = "⚠ " + data.error;
+      postfixQueueContent.appendChild(p);
+      return;
+    }
+
+    // Raw text fallback (older postfix without -j support)
+    if (data.rawText !== undefined && data.queue.length === 0) {
+      if (!data.rawText) {
+        const p = document.createElement("p");
+        p.className = "form-hint queue-empty";
+        p.textContent = "✓ Mail queue is empty";
+        postfixQueueContent.appendChild(p);
+        return;
+      }
+      const pre = document.createElement("pre");
+      pre.className = "queue-raw-text";
+      pre.textContent = data.rawText;
+      postfixQueueContent.appendChild(pre);
+      return;
+    }
+
+    if (!data.queue.length) {
+      const p = document.createElement("p");
+      p.className = "form-hint queue-empty";
+      p.textContent = "✓ Mail queue is empty";
+      postfixQueueContent.appendChild(p);
+      return;
+    }
+
+    // Summary
+    const summary = document.createElement("p");
+    summary.className = "queue-summary";
+    const deferred = data.queue.filter(m => m.queue_name === "deferred").length;
+    summary.textContent = `${data.queue.length} message${data.queue.length !== 1 ? "s" : ""} queued${deferred ? ` (${deferred} deferred)` : ""}`;
+    postfixQueueContent.appendChild(summary);
+
+    // Table
+    const table = document.createElement("table");
+    table.className = "queue-table";
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["Queue", "ID", "From", "To", "Size", "Age", "Reason", ""].forEach(label => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+
+    data.queue.forEach(msg => {
+      const tr = document.createElement("tr");
+      tr.className = msg.queue_name === "deferred" ? "queue-row deferred" : "queue-row active";
+
+      const queueTd   = document.createElement("td");
+      queueTd.className = "queue-badge-cell";
+      const badge = document.createElement("span");
+      badge.className = "queue-badge " + (msg.queue_name === "deferred" ? "badge-deferred" : "badge-active");
+      badge.textContent = msg.queue_name || "active";
+      queueTd.appendChild(badge);
+
+      const idTd     = document.createElement("td");
+      idTd.className = "queue-id";
+      idTd.textContent = msg.queue_id || "—";
+
+      const fromTd   = document.createElement("td");
+      fromTd.textContent = msg.sender || "—";
+
+      const toTd     = document.createElement("td");
+      const recipients = (msg.recipients || []).map(r => r.address).join(", ");
+      toTd.textContent = recipients || "—";
+
+      const sizeTd   = document.createElement("td");
+      sizeTd.textContent = msg.message_size ? Math.ceil(msg.message_size / 1024) + " KB" : "—";
+
+      const ageTd    = document.createElement("td");
+      if (msg.arrival_time) {
+        const ageS = Math.floor(Date.now() / 1000) - msg.arrival_time;
+        ageTd.textContent = ageS < 3600 ? Math.floor(ageS / 60) + "m" : Math.floor(ageS / 3600) + "h";
+      } else {
+        ageTd.textContent = "—";
+      }
+
+      const reasonTd = document.createElement("td");
+      reasonTd.className = "queue-reason";
+      const firstReason = (msg.recipients || []).find(r => r.delay_reason)?.delay_reason || "";
+      reasonTd.textContent = firstReason.slice(0, 80) || "—";
+      reasonTd.title = firstReason;
+
+      const actionTd = document.createElement("td");
+      if (msg.queue_id && /^[A-Za-z0-9]{8,20}$/.test(msg.queue_id)) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "btn btn-xs btn-danger-outline";
+        delBtn.textContent = "Delete";
+        delBtn.title = "Remove this message from the queue (postsuper -d)";
+        delBtn.addEventListener("click", async () => {
+          if (!confirm("Delete queue message " + msg.queue_id + "?")) return;
+          try {
+            await apiFetch("/api/postfix/queue/" + msg.queue_id, "DELETE");
+            tr.remove();
+          } catch (err) {
+            appendLog("Delete failed: " + err.message, "fail");
+          }
+        });
+        actionTd.appendChild(delBtn);
+      }
+
+      tr.append(queueTd, idTd, fromTd, toTd, sizeTd, ageTd, reasonTd, actionTd);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    postfixQueueContent.appendChild(table);
+  }
+
+  async function loadPostfixLogs() {
+    if (!postfixLogsContent) return;
+    postfixLogsContent.style.display = "block";
+    postfixLogsContent.textContent = "Loading logs…";
+    try {
+      const res  = await apiFetch("/api/postfix/logs", "GET");
+      const data = await res.json();
+      postfixLogsContent.replaceChildren();
+      if (!data.lines?.length) {
+        const p = document.createElement("p");
+        p.className = "form-hint";
+        p.textContent = "No log lines found — check /var/log/mail.log or journalctl -u postfix";
+        postfixLogsContent.appendChild(p);
+        return;
+      }
+      const pre = document.createElement("pre");
+      pre.className = "postfix-log-pre";
+      data.lines.forEach(line => {
+        const span = document.createElement("span");
+        span.className = line.includes("status=sent") ? "log-sent"
+                       : line.includes("status=bounced") || line.includes("reject") ? "log-fail"
+                       : line.includes("status=deferred") ? "log-deferred"
+                       : "";
+        span.textContent = line + "\n";
+        pre.appendChild(span);
+      });
+      postfixLogsContent.appendChild(pre);
+    } catch (err) {
+      postfixLogsContent.textContent = "Error: " + err.message;
+    }
+  }
+
+  document.getElementById("btn-refresh-queue")?.addEventListener("click", loadPostfixQueue);
+  document.getElementById("btn-flush-queue")?.addEventListener("click", async () => {
+    try {
+      await apiFetch("/api/postfix/flush", "POST");
+      appendLog("Flush request sent — deferred messages will retry now.", "system");
+      setTimeout(loadPostfixQueue, 1500);
+    } catch (err) {
+      appendLog("Flush failed: " + err.message, "fail");
+    }
+  });
+
+  let logsVisible = false;
+  document.getElementById("btn-load-logs")?.addEventListener("click", () => {
+    if (logsVisible) {
+      if (postfixLogsContent) postfixLogsContent.style.display = "none";
+      logsVisible = false;
+      document.getElementById("btn-load-logs").textContent = "View Logs";
+    } else {
+      logsVisible = true;
+      document.getElementById("btn-load-logs").textContent = "Hide Logs";
+      loadPostfixLogs();
+    }
+  });
+
   // ── Initial Load ────────────────────────────────────────────────────────────
   loadSettings();
   loadWizardOptions();

@@ -218,6 +218,23 @@
             </ul>
           </details>
         </div>
+
+        <!-- Postfix Mail Queue -->
+        <div class="panel postfix-panel">
+          <div class="postfix-panel-header">
+            <div>
+              <h3>Postfix Mail Queue</h3>
+              <p class="section-desc">View queued/deferred messages and recent delivery logs to diagnose non-delivery.</p>
+            </div>
+            <div class="postfix-panel-actions">
+              <button id="btn-refresh-queue" class="btn btn-secondary" title="Reload the Postfix mail queue">Refresh Queue</button>
+              <button id="btn-flush-queue" class="btn btn-secondary" title="Retry all deferred messages immediately (postqueue -f)">Flush Deferred</button>
+              <button id="btn-load-logs" class="btn btn-secondary" title="Load the last 200 lines from /var/log/mail.log">View Logs</button>
+            </div>
+          </div>
+          <div id="postfix-queue-content" class="postfix-queue-content"></div>
+          <div id="postfix-logs-content" class="postfix-logs-content" style="display:none"></div>
+        </div>
       </section>
 
       <!-- Tab Content: Campaign Wizard -->
