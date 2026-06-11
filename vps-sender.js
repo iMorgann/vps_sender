@@ -132,6 +132,54 @@ function updateEngineStatus(newStatus) {
   broadcastSSE({ type: "state", status: newStatus });
 }
 
+// ── Postfix log watcher ────────────────────────────────────────────────────────
+let logWatchPath = null;
+let logWatchPos  = 0;
+
+function parsePostfixLogLines(lines) {
+  // Matches: to=<email>, relay=HOST, dsn=X.X.X, status=WORD (message)
+  const RE = /to=<([^>]+)>.*?relay=([^\s,\[]+).*?dsn=([^\s,]+).*?status=(\w+)\s*\(([^)]*)\)/;
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(RE);
+    if (!m) continue;
+    out.push({
+      email:   m[1].toLowerCase(),
+      relay:   m[2],
+      dsn:     m[3],
+      status:  m[4],   // sent / bounced / deferred
+      message: m[5].slice(0, 120),
+    });
+  }
+  return out;
+}
+
+function startLogWatcher() {
+  const candidates = ["/var/log/mail.log", "/var/log/maillog"];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) { logWatchPath = p; break; }
+  }
+  if (!logWatchPath) return;
+
+  logger.info("log_watcher_started", { path: logWatchPath });
+  setInterval(() => {
+    try {
+      const stat = fs.statSync(logWatchPath);
+      if (stat.size < logWatchPos) logWatchPos = 0;   // log rotated
+      if (stat.size === logWatchPos) return;           // no new data
+      const fd  = fs.openSync(logWatchPath, "r");
+      const len = Math.min(stat.size - logWatchPos, 64 * 1024);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, logWatchPos);
+      fs.closeSync(fd);
+      logWatchPos += len; // advance only by bytes actually read — don't skip if burst > 64 KB
+      const newLines = buf.toString("utf8").split("\n").filter(Boolean);
+      const events   = parsePostfixLogLines(newLines);
+      if (events.length) broadcastSSE({ type: "postfix_analytics", events });
+    } catch { /* log inaccessible — skip tick */ }
+  }, 5000);
+}
+
 // ── ANSI colours ───────────────────────────────────────────────────────────────
 const C = { reset:"\x1b[0m", bold:"\x1b[1m", dim:"\x1b[2m", green:"\x1b[32m",
             red:"\x1b[31m", yellow:"\x1b[33m", cyan:"\x1b[36m", white:"\x1b[37m",
@@ -966,6 +1014,9 @@ async function startWebServer() {
             dynamicFromDomain:      webCampaignConfig.dynamicFromDomain      || "",
             attachmentRenameMode:   webCampaignConfig.attachmentRenameMode   || "none",
             attachmentRenamePrefix: webCampaignConfig.attachmentRenamePrefix || "",
+            selectedDomains:        webCampaignConfig.selectedDomains        || [],
+            // namesFile exposed as bare filename so wizard can restore names-file vs override selection
+            namesFile: webCampaignConfig.namesFile ? path.basename(webCampaignConfig.namesFile) : "",
           },
         }));
         return;
@@ -1145,6 +1196,12 @@ async function startWebServer() {
         if (body.rotEvery          !== undefined) safe.rotEvery          = parseInt(body.rotEvery, 10) || 2;
         if (body.resume            !== undefined) safe.resume            = !!body.resume;
         if (body.domainRotation    !== undefined) safe.domainRotation    = !!body.domainRotation;
+        if (body.selectedDomains !== undefined) {
+          const configured = Object.keys(getCachedConfig().dkim || {});
+          safe.selectedDomains = (Array.isArray(body.selectedDomains) ? body.selectedDomains : [])
+            .map(d => String(d || "").replace(/[\r\n]/g, "").trim().toLowerCase())
+            .filter(d => d && configured.includes(d));
+        }
         if (body.dynamicFromDomain !== undefined) safe.dynamicFromDomain = String(body.dynamicFromDomain || "").replace(/[\r\n]/g, "").trim().toLowerCase();
         if (body.fromEmailOverride !== undefined) safe.fromEmailOverride = String(body.fromEmailOverride || "").replace(/[\r\n]/g, "").trim();
         if (body.fromNameOverride  !== undefined) safe.fromNameOverride  = String(body.fromNameOverride  || "").replace(/[\r\n"\\]/g, "").trim();
@@ -1252,8 +1309,21 @@ async function startWebServer() {
         }
 
         try {
-          const mxDomain = toAddr.split("@")[1];
-          const result = await deliver(toAddr, mxDomain, mime, fromEmail, cfg.heloHost || "mail.localhost", {
+          const recipientDomain = toAddr.split("@")[1];
+          // Resolve MX record so the test send uses the same delivery path as a real campaign.
+          // Without this, direct mode would connect to the recipient domain itself (e.g. gmail.com:25)
+          // instead of the actual MX host (e.g. gmail-smtp-in.l.google.com:25).
+          let mxHost = recipientDomain;
+          if (cfg.transport !== "relay") {
+            try {
+              const recs = await require("dns").promises.resolveMx(recipientDomain);
+              if (recs && recs.length) {
+                recs.sort((a, b) => a.priority - b.priority);
+                mxHost = recs[0].exchange;
+              }
+            } catch { /* fallback to domain — same as probePort25 */ }
+          }
+          const result = await deliver(toAddr, mxHost, mime, fromEmail, cfg.heloHost || "mail.localhost", {
             tlsRejectUnauthorized: cfg.tlsRejectUnauthorized !== false,
             relayHost:                cfg.relayHost || "127.0.0.1",
             relayPort:                cfg.relayPort || 587,
@@ -1387,6 +1457,132 @@ async function startWebServer() {
           });
           return;
         }
+      }
+
+      // ── Delivery Analytics ──────────────────────────────────────────────
+      if (req.method === "GET" && pathname === "/api/analytics") {
+        const { getDb } = require("./lib/campaign/state");
+        const db         = getDb();
+        const campaignId = (url.searchParams.get("campaignId") || "default").slice(0, 100);
+        const limit      = Math.max(1, Math.min(parseInt(url.searchParams.get("limit"), 10) || 500, 2000));
+
+        // Campaign results from SQLite
+        let campaign = [];
+        if (db) {
+          try {
+            campaign = db.prepare(
+              "SELECT email, status, from_email AS fromEmail, subject, smtp_label AS smtpLabel, error, tls, created_at FROM campaign_results WHERE campaign_id = ? ORDER BY id DESC LIMIT ?"
+            ).all(campaignId, limit);
+          } catch { /* DB not ready */ }
+        }
+
+        // Postfix delivery events from mail log
+        let postfix = [];
+        const logCandidates = ["/var/log/mail.log", "/var/log/maillog"];
+        for (const lp of logCandidates) {
+          if (fs.existsSync(lp)) {
+            try {
+              const stat = fs.statSync(lp);
+              const LOG_MAX = 5 * 1024 * 1024;
+              let rawLines;
+              if (stat.size > LOG_MAX) {
+                const fd  = fs.openSync(lp, "r");
+                const buf = Buffer.alloc(LOG_MAX);
+                fs.readSync(fd, buf, 0, LOG_MAX, stat.size - LOG_MAX);
+                fs.closeSync(fd);
+                rawLines = buf.toString("utf8").split("\n").filter(Boolean);
+              } else {
+                rawLines = fs.readFileSync(lp, "utf8").split("\n").filter(Boolean);
+              }
+              postfix = parsePostfixLogLines(rawLines);
+            } catch { /* permission denied */ }
+            break;
+          }
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ campaign, postfix }));
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/analytics/campaigns") {
+        const { getDb } = require("./lib/campaign/state");
+        const db = getDb();
+        let campaigns = ["default"];
+        if (db) {
+          try {
+            const rows = db.prepare(
+              "SELECT DISTINCT campaign_id FROM campaign_results ORDER BY campaign_id DESC LIMIT 100"
+            ).all();
+            campaigns = rows.map(r => r.campaign_id);
+            if (!campaigns.includes("default")) campaigns.push("default");
+          } catch { /* DB not ready */ }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ campaigns }));
+        return;
+      }
+
+      // ── IP Scanner ──────────────────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/api/scan/ips") {
+        if (engineState.status !== "idle") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Engine busy" }));
+          return;
+        }
+        const body = await getJsonBody();
+
+        // Accept ips as array or newline-delimited string
+        let rawIps = Array.isArray(body.ips) ? body.ips : String(body.ips || "").split(/[\s,]+/);
+        const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+        const ips = [...new Set(rawIps.map(s => s.trim()).filter(s => IPV4_RE.test(s)))];
+
+        if (!ips.length) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No valid IPv4 addresses provided" }));
+          return;
+        }
+
+        const rawOutput  = (body.output && body.output.trim()) ? body.output.trim() : "smtp.txt";
+        const outputFile = safeWorkspacePath(rawOutput) || safeWorkspacePath("smtp.txt");
+        if (!outputFile) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid output path" }));
+          return;
+        }
+
+        campaignCancelToken = { cancelled: false, paused: false };
+        const includeWeak = !!body.includeWeak;
+
+        (async () => {
+          const { scanIps } = require("./lib/scanner/ip-scanner");
+          updateEngineStatus("scanning");
+          broadcastSSE({ type: "log", text: `IP scan: checking ${ips.length} address(es)…`, logClass: "system" });
+
+          const results = [];
+          await scanIps(ips, 8, (_done, _total, info) => {
+            results.push(info);
+            broadcastSSE({ type: "scan_progress", results, done: false, mode: "ip" });
+          }, campaignCancelToken);
+
+          const passing = results.filter(r => includeWeak ? r.port25Open : r.usable);
+          const smtpEntries = passing.map(r => ({
+            host:      r.ptrHost || r.ip,
+            fromEmail: `postmaster@${r.domain || r.ip}`,
+          }));
+          saveSmtpConfig(smtpEntries, outputFile);
+
+          broadcastSSE({ type: "scan_progress", results, done: true, mode: "ip", entriesSaved: smtpEntries.length });
+          broadcastSSE({ type: "log", text: `IP scan done — ${smtpEntries.length} usable sender(s) saved to ${outputFile}`, logClass: "system" });
+          updateEngineStatus("idle");
+        })().catch(err => {
+          broadcastSSE({ type: "log", text: `IP scan error: ${err.message}`, logClass: "fail" });
+          updateEngineStatus("idle");
+        });
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, count: ips.length }));
+        return;
       }
 
       // ── DKIM key generation ──────────────────────────────────────────────
@@ -1618,6 +1814,8 @@ async function startWebServer() {
     console.log("");
     logger.info("server_started", { host, port, public: host === "0.0.0.0" });
 
+    startLogWatcher();
+
     // Cross-platform browser open (only when binding to localhost)
     if (host === "127.0.0.1") {
       try {
@@ -1651,7 +1849,8 @@ let webCampaignConfig = {
   smtpFile:          "smtp.txt",
   rotEvery:          2,
   resume:            true,
-  domainRotation:    false,
+  domainRotation:    false,   // legacy flag — kept for backward compat; use selectedDomains instead
+  selectedDomains:   [],
   dynamicFromDomain: "",
   fromEmailOverride: "",
   fromNameOverride:       "",
@@ -1746,18 +1945,20 @@ async function runWebCampaign() {
     ? `web-${webCampaignConfig.recipientsFile}-${webCampaignConfig.smtpFile}`.replace(/[^a-z0-9._-]/gi, "_")
     : `web-${Date.now()}`;
 
-  // Build domain rotation pool from configured DKIM entries that have key files on disk
-  const domainPool = webCampaignConfig.domainRotation
-    ? Object.entries(cfg.dkim || {})
-        .filter(([domain, d]) => fs.existsSync(path.join(__dirname, d.privateKeyPath || `dkim/${domain}.pem`)))
-        .map(([domain]) => domain)
-    : [];
+  // Build domain rotation pool — prefer explicit selectedDomains; fall back to legacy domainRotation flag
+  const _selectedOrLegacy = (webCampaignConfig.selectedDomains || []).length > 0
+    ? webCampaignConfig.selectedDomains
+    : (webCampaignConfig.domainRotation ? Object.keys(cfg.dkim || {}) : []);
+  const domainPool = _selectedOrLegacy.filter(d => {
+    const dk = cfg.dkim?.[d];
+    return dk && fs.existsSync(path.join(__dirname, dk.privateKeyPath || `dkim/${d}.pem`));
+  });
 
-  if (webCampaignConfig.domainRotation) {
+  if (_selectedOrLegacy.length > 0) {
     if (domainPool.length === 0) {
-      broadcastSSE({ type: "log", text: "Domain rotation is enabled but no configured domains have key files. Add domains in the Sending Domains tab.", logClass: "warn" });
+      broadcastSSE({ type: "log", text: "Selected sending domains have no DKIM key files on disk — domain rotation skipped. Regenerate keys in the Sending Domains tab.", logClass: "warn" });
     } else {
-      broadcastSSE({ type: "log", text: `Domain rotation: using ${domainPool.length} domain(s): ${domainPool.join(", ")}`, logClass: "system" });
+      broadcastSSE({ type: "log", text: `Sending domains: rotating across ${domainPool.length} domain(s): ${domainPool.join(", ")}`, logClass: "system" });
     }
   }
 

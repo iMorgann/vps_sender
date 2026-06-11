@@ -98,6 +98,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (data.type === "log")               appendLog(data.text, data.logClass);
       if (data.type === "scan_progress")     updateScanProgress(data);
       if (data.type === "campaign_progress") updateCampaignProgress(data);
+      if (data.type === "postfix_analytics") {
+        if (document.getElementById("analytics-live-toggle")?.checked) {
+          const sel = document.getElementById("analytics-campaign-select");
+          loadAnalytics(sel ? sel.value : "default");
+        }
+      }
     };
   }
   attachSseHandlers(eventSource);
@@ -168,7 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear
       recSelect.innerHTML = "";
-      nameSelect.innerHTML = '<option value="">(None - use plain display names)</option>';
+      nameSelect.innerHTML = '<option value="">(None — use Display Name field above)</option>';
       subjSelect.innerHTML = "";
       smtpSelect.innerHTML = '<option value="direct">Direct-to-MX (Resolves MX directly, default)</option>';
       scanSrcSelect.innerHTML = "";
@@ -229,9 +235,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Restore wizard text inputs from server state
       const wiz = data.campaignWizard || {};
+      // Override the hardcoded "names.txt" default with actual server state.
+      // wiz.namesFile="" means user deliberately cleared the file (chose "None" option).
+      // Without this, the guard below never fires when names.txt exists on disk.
+      if (wiz.namesFile !== undefined) selectDefaultOption(nameSelect, wiz.namesFile);
       const nameOverrideEl = document.getElementById("wizard-from-name-override");
       const replyToEl      = document.getElementById("wizard-reply-to");
-      if (nameOverrideEl && wiz.fromNameOverride) nameOverrideEl.value = wiz.fromNameOverride;
+      // Only restore the override if NO names file is selected — if a file is active, the
+      // file wins and showing the override would confuse the user about which is used.
+      if (nameOverrideEl && wiz.fromNameOverride && !nameSelect.value) nameOverrideEl.value = wiz.fromNameOverride;
       if (replyToEl      && wiz.replyTo)          replyToEl.value      = wiz.replyTo;
       if (wiz.fromEmailOverride) {
         document.getElementById("from-mode-fixed")?.click();
@@ -249,6 +261,45 @@ document.addEventListener("DOMContentLoaded", () => {
       if (renPrefixEl && wiz.attachmentRenamePrefix) renPrefixEl.value = wiz.attachmentRenamePrefix;
       updateAttachmentRenameUI();
 
+      // Sending domain checkboxes — only populated when data.domains is present (i.e. from loadWizardOptions,
+      // not from the file-editor list refresh which doesn't fetch /api/domains)
+      const domainsContainer = document.getElementById("wizard-domains-container");
+      if (domainsContainer && data.domains !== undefined) {
+        domainsContainer.innerHTML = "";
+        const domainList   = data.domains || [];
+        const prevSelected = wiz.selectedDomains || [];
+        if (!domainList.length) {
+          const msg = document.createElement("span");
+          msg.className   = "text-dim";
+          msg.textContent = "No sending domains configured. Add domains in the Sending Domains tab.";
+          domainsContainer.appendChild(msg);
+        } else {
+          domainList.forEach(d => {
+            const label = document.createElement("label");
+            label.className = "checkbox-wrapper" + (d.hasKey ? "" : " checkbox-wrapper-disabled");
+            const input = document.createElement("input");
+            input.type     = "checkbox";
+            input.name     = "sendingDomains";
+            input.value    = d.domain;
+            input.disabled = !d.hasKey;
+            input.checked  = prevSelected.includes(d.domain) && d.hasKey;
+            input.addEventListener("change", () => { updateFromModeUI(); updateSenderPreview(); });
+            const span = document.createElement("span");
+            span.className = "checkbox-label";
+            span.textContent = d.domain;
+            const badge = document.createElement("small");
+            badge.style.marginLeft = "6px";
+            badge.style.opacity    = "0.7";
+            badge.textContent = d.hasKey ? "(DKIM ✓)" : "(no key — generate in Sending Domains tab)";
+            span.appendChild(badge);
+            label.appendChild(input);
+            label.appendChild(span);
+            domainsContainer.appendChild(label);
+          });
+        }
+        updateFromModeUI();
+      }
+
       if (bodiesContainer.children.length === 0) {
         bodiesContainer.innerHTML = `<span class="text-dim text-center">No HTML templates found. Copy templates into workspace.</span>`;
       }
@@ -259,9 +310,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadWizardOptions() {
     try {
-      const res  = await apiFetch("/api/files");
-      if (!res.ok) { appendLog(`Wizard load failed (HTTP ${res.status})`, "fail"); return; }
-      const data = await res.json();
+      const [filesRes, domainsRes] = await Promise.all([apiFetch("/api/files"), apiFetch("/api/domains")]);
+      if (!filesRes.ok) { appendLog(`Wizard load failed (HTTP ${filesRes.status})`, "fail"); return; }
+      const data    = await filesRes.json();
+      const domains = await domainsRes.json().catch(() => []);
+      data.domains  = Array.isArray(domains) ? domains : [];
       populateWizardFromData(data);
     } catch (e) {
       appendLog("Failed to load campaign wizard source files", "fail");
@@ -277,11 +330,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Toggle from-mode inputs based on radio selection
+  // Toggle from-mode inputs based on radio selection and active domain pool
   function updateFromModeUI() {
-    const mode = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
-    document.getElementById("fixed-from-group").style.display         = mode === "fixed"   ? "block" : "none";
+    const mode       = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
+    const hasPool    = Array.from(document.querySelectorAll('input[name="sendingDomains"]:checked')).length > 0;
+    document.getElementById("fixed-from-group").style.display          = mode === "fixed"   ? "block" : "none";
     document.getElementById("dynamic-from-domain-group").style.display = mode === "dynamic" ? "block" : "none";
+    // When dynamic mode + pool active: show pool note, hide manual domain input
+    const dynInput = document.getElementById("dynamic-from-input");
+    const poolNote = document.getElementById("dynamic-pool-note");
+    if (dynInput) dynInput.style.display = (mode === "dynamic" && hasPool) ? "none" : "";
+    if (poolNote) poolNote.style.display = (mode === "dynamic" && hasPool) ? "block" : "none";
   }
   document.querySelectorAll('input[name="from-mode"]').forEach(radio => {
     radio.addEventListener("change", () => { updateFromModeUI(); updateSenderPreview(); });
@@ -293,16 +352,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const senderEl = document.getElementById("preview-sender-value");
     if (!fromEl || !senderEl) return;
 
-    const displayName = document.getElementById("wizard-from-name-override")?.value.trim() || "";
-    const namePrefix  = displayName ? `"${displayName}" ` : "";
+    const displayName  = document.getElementById("wizard-from-name-override")?.value.trim() || "";
+    const namesFile    = document.getElementById("wizard-names-file")?.value || "";
+    const namePrefix   = displayName
+      ? `"${displayName}" `
+      : namesFile ? `"(rotating from ${namesFile})" ` : "";
 
     if (mode === "fixed") {
       const val = document.getElementById("wizard-fixed-from-email")?.value.trim() || "";
       fromEl.textContent = val ? `${namePrefix}<${val}>` : `${namePrefix}<sender@yourdomain.com>`;
       fromEl.className   = "sender-preview-value" + (val ? "" : " text-dim");
     } else if (mode === "dynamic") {
-      const domain = document.getElementById("wizard-dynamic-from-domain")?.value.trim() || "";
-      const addr   = domain ? `j.smith47@${domain}` : "j.smith47@yourdomain.com";
+      const hasPool   = Array.from(document.querySelectorAll('input[name="sendingDomains"]:checked')).length > 0;
+      const domain    = document.getElementById("wizard-dynamic-from-domain")?.value.trim() || "";
+      const domainStr = hasPool ? "<rotating domain>" : (domain || "yourdomain.com");
+      const addr      = `j.smith47@${domainStr}`;
       fromEl.textContent = `${namePrefix}<${addr}>`;
       fromEl.className   = "sender-preview-value text-dim";
     } else {
@@ -325,8 +389,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("wizard-fixed-from-email")?.addEventListener("input", updateSenderPreview);
   document.getElementById("wizard-dynamic-from-domain")?.addEventListener("input", updateSenderPreview);
-  document.getElementById("wizard-from-name-override")?.addEventListener("input", updateSenderPreview);
   document.getElementById("wizard-reply-to")?.addEventListener("input", updateSenderPreview);
+
+  // Names file and override field are mutually exclusive.
+  // Selecting a file clears the override; typing an override resets the file to (None).
+  document.getElementById("wizard-names-file")?.addEventListener("change", () => {
+    const fileEl     = document.getElementById("wizard-names-file");
+    const overrideEl = document.getElementById("wizard-from-name-override");
+    if (fileEl?.value && overrideEl) overrideEl.value = "";
+    updateSenderPreview();
+  });
+  document.getElementById("wizard-from-name-override")?.addEventListener("input", () => {
+    const overrideEl = document.getElementById("wizard-from-name-override");
+    const fileEl     = document.getElementById("wizard-names-file");
+    if (overrideEl?.value.trim() && fileEl) fileEl.value = "";
+    updateSenderPreview();
+  });
 
   // ── Attachment rename UI ───────────────────────────────────────────────────
   function updateAttachmentRenameUI() {
@@ -366,11 +444,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const checkedBodies = Array.from(document.querySelectorAll('input[name="htmlBodies"]:checked')).map(el => el.value);
     const checkedAttachments = Array.from(document.querySelectorAll('input[name="attachments"]:checked')).map(el => el.value);
 
-    const fromMode    = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
-    const isDomainRot = document.getElementById("wizard-domain-rotation").checked;
-    if (fromMode === "dynamic" && isDomainRot) {
-      appendLog("Warning: Unique per-recipient mode overrides Domain Rotation — domain rotation will be ignored.", "warn");
-    }
+    const fromMode       = document.querySelector('input[name="from-mode"]:checked')?.value || "smtp";
+    const selectedDomains = Array.from(document.querySelectorAll('input[name="sendingDomains"]:checked')).map(el => el.value);
 
     const payload = {
       recipientsFile: document.getElementById("wizard-recipient-file").value,
@@ -381,8 +456,8 @@ document.addEventListener("DOMContentLoaded", () => {
       smtpFile: document.getElementById("wizard-smtp-file").value,
       rotEvery:          parseInt(document.getElementById("wizard-rot-every").value, 10) || 2,
       resume:            document.getElementById("wizard-resume").checked,
-      domainRotation:    isDomainRot,
-      dynamicFromDomain: fromMode === "dynamic"
+      selectedDomains,
+      dynamicFromDomain: (fromMode === "dynamic" && !selectedDomains.length)
         ? (document.getElementById("wizard-dynamic-from-domain").value.trim() || "")
         : "",
       fromEmailOverride: fromMode === "fixed"
@@ -798,9 +873,71 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ── SMTP / Domain Scanner ───────────────────────────────────────────────────
-  const btnTriggerScan = document.getElementById("btn-trigger-scan");
-  const scanResultsTbody = document.getElementById("scan-results-tbody");
+  const btnTriggerScan    = document.getElementById("btn-trigger-scan");
+  const scanResultsTbody  = document.getElementById("scan-results-tbody");
+  const scanResultsThead  = document.getElementById("scan-results-thead");
   const scanCounterStatus = document.getElementById("scan-counter-status");
+
+  // Scanner mode toggle
+  let scanMode = "domain"; // "domain" | "ip"
+  document.getElementById("mode-btn-domain")?.addEventListener("click", () => {
+    scanMode = "domain";
+    document.getElementById("mode-btn-domain").classList.add("active");
+    document.getElementById("mode-btn-ip").classList.remove("active");
+    document.getElementById("domain-scan-controls").style.display = "";
+    document.getElementById("ip-scan-controls").style.display = "none";
+    if (scanResultsThead) scanResultsThead.innerHTML = "<tr><th>Domain</th><th>MX Server</th><th>Port 25</th><th>SPF</th><th>DMARC</th><th>Score</th></tr>";
+  });
+  document.getElementById("mode-btn-ip")?.addEventListener("click", () => {
+    scanMode = "ip";
+    document.getElementById("mode-btn-ip").classList.add("active");
+    document.getElementById("mode-btn-domain").classList.remove("active");
+    document.getElementById("ip-scan-controls").style.display = "";
+    document.getElementById("domain-scan-controls").style.display = "none";
+    if (scanResultsThead) scanResultsThead.innerHTML = "<tr><th>IP</th><th>PTR Host</th><th>Port 25</th><th>SPF</th><th>DMARC</th><th>Score</th></tr>";
+  });
+
+  // IP file upload → populate textarea
+  document.getElementById("ip-scan-file-upload")?.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const ta = document.getElementById("ip-scan-textarea");
+      if (ta) ta.value = ev.target.result;
+    };
+    reader.readAsText(file);
+  });
+
+  // IP scan trigger
+  document.getElementById("btn-trigger-ip-scan")?.addEventListener("click", async () => {
+    const ta          = document.getElementById("ip-scan-textarea");
+    const rawText     = ta ? ta.value : "";
+    const ips         = [...new Set(rawText.split(/[\s,]+/).map(s => s.trim()).filter(s => /^\d{1,3}(\.\d{1,3}){3}$/.test(s)))];
+    if (!ips.length) { alert("No valid IPv4 addresses found. Enter one IP per line."); return; }
+    const includeWeak = document.getElementById("ip-scan-include-weak")?.checked ?? false;
+    const output      = document.getElementById("ip-scan-output")?.value || "smtp.txt";
+
+    const btn = document.getElementById("btn-trigger-ip-scan");
+    btn.disabled = true;
+    scanCounterStatus.className = "badge warning";
+    scanCounterStatus.textContent = "Scanning...";
+    scanResultsTbody.innerHTML = `<tr><td colspan="6" class="text-center text-dim">Probing ${ips.length} IP(s)…</td></tr>`;
+
+    try {
+      const res  = await apiFetch("/api/scan/ips", "POST", { ips, includeWeak, output });
+      const data = await res.json();
+      if (!data.success) {
+        alert("IP scan could not start: " + (data.error || "unknown error"));
+        btn.disabled = false;
+        scanCounterStatus.className = "badge error";
+        scanCounterStatus.textContent = "Failed";
+      }
+    } catch {
+      alert("Error triggering IP scan");
+      btn.disabled = false;
+    }
+  });
 
   btnTriggerScan.addEventListener("click", async () => {
     const file = document.getElementById("scan-source-file").value;
@@ -836,6 +973,61 @@ document.addEventListener("DOMContentLoaded", () => {
     return s;
   }
 
+  function renderScanRow(d) {
+    const tr = document.createElement("tr");
+    const isIp = "ip" in d;
+
+    // Col 1: domain or IP
+    const td1 = document.createElement("td");
+    const strong = document.createElement("strong");
+    strong.textContent = isIp ? (d.ip || "") : (d.domain || "");
+    td1.appendChild(strong);
+    tr.appendChild(td1);
+
+    // Col 2: MX server or PTR host
+    const td2 = document.createElement("td");
+    const col2val = isIp ? d.ptrHost : d.mx;
+    if (col2val) { td2.textContent = col2val; }
+    else { td2.appendChild(makeBadge("text-dim", "none")); }
+    tr.appendChild(td2);
+
+    // Port 25
+    const tdPort = document.createElement("td");
+    tdPort.appendChild(d.port25Open ? makeBadge("success","OPEN") : makeBadge("error","BLOCKED"));
+    tr.appendChild(tdPort);
+
+    // SPF
+    const tdSpf = document.createElement("td");
+    tdSpf.appendChild(
+      d.spfStrength === "hard" ? makeBadge("success","HARD") :
+      d.spfStrength === "soft" ? makeBadge("warning","SOFT") :
+      makeBadge("error","NONE")
+    );
+    tr.appendChild(tdSpf);
+
+    // DMARC
+    const tdDmarc = document.createElement("td");
+    tdDmarc.appendChild(
+      d.dmarcPolicy === "reject"     ? makeBadge("success","REJECT") :
+      d.dmarcPolicy === "quarantine" ? makeBadge("warning","QUARANTINE") :
+      makeBadge("error","NONE")
+    );
+    tr.appendChild(tdDmarc);
+
+    // Score
+    const maxScore = isIp ? 5 : 4;
+    const score = d.score != null ? d.score
+      : (d.port25Open ? 2 : 0) + (d.spfStrength !== "none" ? 1 : 0) + (d.dmarcPolicy !== "none" ? 1 : 0);
+    const tdScore = document.createElement("td");
+    tdScore.appendChild(makeBadge(
+      score >= 3 ? "success" : score >= 1 ? "warning" : "error",
+      `${score >= 3 ? "GOOD" : score >= 1 ? "WEAK" : "POOR"} (${score}/${maxScore})`
+    ));
+    tr.appendChild(tdScore);
+
+    return tr;
+  }
+
   function updateScanProgress(data) {
     if (data.results) {
       scanResultsTbody.replaceChildren();
@@ -844,70 +1036,25 @@ document.addEventListener("DOMContentLoaded", () => {
         const emptyTd = document.createElement("td");
         emptyTd.colSpan = 6;
         emptyTd.className = "text-center text-dim";
-        emptyTd.textContent = "No domains found in file.";
+        emptyTd.textContent = data.mode === "ip" ? "No IPs processed yet." : "No domains found in file.";
         emptyTr.appendChild(emptyTd);
         scanResultsTbody.appendChild(emptyTr);
       } else {
-        data.results.forEach(d => {
-          const tr = document.createElement("tr");
-
-          // Domain cell
-          const tdDomain = document.createElement("td");
-          const strong = document.createElement("strong");
-          strong.textContent = d.domain || "";
-          tdDomain.appendChild(strong);
-          tr.appendChild(tdDomain);
-
-          // MX cell
-          const tdMx = document.createElement("td");
-          if (d.mx) { tdMx.textContent = d.mx; }
-          else { tdMx.appendChild(makeBadge("text-dim", "none")); }
-          tr.appendChild(tdMx);
-
-          // Port 25
-          const tdPort = document.createElement("td");
-          tdPort.appendChild(d.port25Open ? makeBadge("success","OPEN") : makeBadge("error","BLOCKED"));
-          tr.appendChild(tdPort);
-
-          // SPF
-          const tdSpf = document.createElement("td");
-          tdSpf.appendChild(
-            d.spfStrength === "hard" ? makeBadge("success","HARD") :
-            d.spfStrength === "soft" ? makeBadge("warning","SOFT") :
-            makeBadge("error","NONE")
-          );
-          tr.appendChild(tdSpf);
-
-          // DMARC
-          const tdDmarc = document.createElement("td");
-          tdDmarc.appendChild(
-            d.dmarcPolicy === "reject"      ? makeBadge("success","REJECT") :
-            d.dmarcPolicy === "quarantine"  ? makeBadge("warning","QUARANTINE") :
-            makeBadge("error","NONE")
-          );
-          tr.appendChild(tdDmarc);
-
-          // Score
-          const score = (d.port25Open ? 2 : 0)
-            + (d.spfStrength !== "none" ? 1 : 0)
-            + (d.dmarcPolicy !== "none" ? 1 : 0);
-          const tdScore = document.createElement("td");
-          tdScore.appendChild(makeBadge(
-            score >= 3 ? "success" : score >= 1 ? "warning" : "error",
-            `${score >= 3 ? "GOOD" : score >= 1 ? "WEAK" : "POOR"} (${score}/4)`
-          ));
-          tr.appendChild(tdScore);
-
-          scanResultsTbody.appendChild(tr);
-        });
+        data.results.forEach(d => scanResultsTbody.appendChild(renderScanRow(d)));
       }
     }
 
     if (data.done) {
-      btnTriggerScan.disabled = false;
+      if (data.mode === "ip") {
+        const btn = document.getElementById("btn-trigger-ip-scan");
+        if (btn) btn.disabled = false;
+        appendLog(`IP scan finished. Saved ${data.entriesSaved} usable sender(s) to smtp.txt.`, "sent");
+      } else {
+        btnTriggerScan.disabled = false;
+        appendLog(`Domain scanner finished. Generated ${data.entriesSaved} usable SMTP rotating entries.`, "sent");
+      }
       scanCounterStatus.className = "badge success";
       scanCounterStatus.textContent = "Done";
-      appendLog(`Domain scanner finished. Generated ${data.entriesSaved} usable SMTP rotating entries.`, "sent");
       loadWizardOptions();
     }
   }
@@ -2382,8 +2529,13 @@ document.addEventListener("DOMContentLoaded", () => {
         delBtn.addEventListener("click", async () => {
           if (!confirm("Delete queue message " + msg.queue_id + "?")) return;
           try {
-            await apiFetch("/api/postfix/queue/" + msg.queue_id, "DELETE");
-            tr.remove();
+            const delRes  = await apiFetch("/api/postfix/queue/" + msg.queue_id, "DELETE");
+            const delData = await delRes.json();
+            if (delData.ok) {
+              tr.remove();
+            } else {
+              appendLog("Delete failed: " + (delData.error || "postsuper error"), "fail");
+            }
           } catch (err) {
             appendLog("Delete failed: " + err.message, "fail");
           }
@@ -2455,8 +2607,206 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // ── Delivery Analytics ─────────────────────────────────────────────────────
+  async function loadAnalyticsCampaigns() {
+    try {
+      const res  = await apiFetch("/api/analytics/campaigns");
+      const data = await res.json();
+      const sel  = document.getElementById("analytics-campaign-select");
+      if (!sel || !data.campaigns) return;
+      const current = sel.value;
+      sel.replaceChildren();
+      data.campaigns.forEach(id => {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = id;
+        if (id === current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    } catch { /* ignore */ }
+  }
+
+  async function loadAnalytics(campaignId) {
+    campaignId = campaignId || document.getElementById("analytics-campaign-select")?.value || "default";
+    const tbody = document.getElementById("analytics-tbody");
+    const summaryEl = document.getElementById("analytics-summary");
+    const hintsEl   = document.getElementById("analytics-hints");
+    if (!tbody) return;
+
+    let campaign = [], postfix = [];
+    try {
+      const res  = await apiFetch(`/api/analytics?campaignId=${encodeURIComponent(campaignId)}`);
+      const data = await res.json();
+      campaign   = data.campaign || [];
+      postfix    = data.postfix  || [];
+    } catch (e) {
+      const errTr = document.createElement("tr");
+      const errTd = document.createElement("td");
+      errTd.colSpan = 6; errTd.className = "text-center text-dim";
+      errTd.textContent = "Error: " + e.message;
+      errTr.appendChild(errTd); tbody.replaceChildren(errTr);
+      return;
+    }
+
+    // Build postfix lookup map: latest event per email
+    const pfMap = {};
+    for (const ev of postfix) {
+      pfMap[ev.email] = ev; // later entries overwrite earlier (log is chronological)
+    }
+
+    // Summary counts — Postfix stats restricted to emails in this campaign only,
+    // because pfMap contains every event in the last 5 MB of mail.log across all campaigns.
+    const campaignEmails = new Set(campaign.map(r => r.email));
+    const counts = { appSent: 0, appFailed: 0, pfSent: 0, pfBounced: 0, pfDeferred: 0 };
+    for (const r of campaign) {
+      if (r.status === "sent")   counts.appSent++;
+      if (r.status === "failed") counts.appFailed++;
+    }
+    for (const [email, ev] of Object.entries(pfMap)) {
+      if (!campaignEmails.has(email)) continue;
+      if (ev.status === "sent")     counts.pfSent++;
+      if (ev.status === "bounced")  counts.pfBounced++;
+      if (ev.status === "deferred") counts.pfDeferred++;
+    }
+
+    // Render summary cards
+    if (summaryEl) {
+      summaryEl.replaceChildren();
+      [
+        { label: "App Sent",       value: counts.appSent,    cls: "ac-blue"  },
+        { label: "App Failed",     value: counts.appFailed,  cls: "ac-red"   },
+        { label: "PF Delivered",   value: counts.pfSent,     cls: "ac-green" },
+        { label: "PF Bounced",     value: counts.pfBounced,  cls: "ac-red"   },
+        { label: "PF Deferred",    value: counts.pfDeferred, cls: "ac-amber" },
+      ].forEach(({ label, value, cls }) => {
+        const card = document.createElement("div");
+        card.className = `analytics-card ${cls}`;
+        const val = document.createElement("div");
+        val.className = "ac-value";
+        val.textContent = value;
+        const lbl = document.createElement("div");
+        lbl.className = "ac-label";
+        lbl.textContent = label;
+        card.append(val, lbl);
+        summaryEl.appendChild(card);
+      });
+    }
+
+    // Delivery hints
+    if (hintsEl) {
+      hintsEl.replaceChildren();
+      const total = counts.appSent + counts.appFailed;
+      const hints = [];
+      if (postfix.length === 0) hints.push("Postfix logs not accessible — confirm server log read permissions.");
+      if (total > 0 && counts.pfBounced / total > 0.10) hints.push("High bounce rate (>10%) — review list quality and remove invalid addresses.");
+      if (total > 0 && counts.pfDeferred / total > 0.20) hints.push("High deferral rate (>20%) — check IP reputation, sending speed, or rate limits.");
+      for (const text of hints) {
+        const div = document.createElement("div");
+        div.className = "analytics-hint";
+        div.textContent = "⚠ " + text;
+        hintsEl.appendChild(div);
+      }
+    }
+
+    // Render per-recipient table
+    tbody.replaceChildren();
+    if (!campaign.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 6; td.className = "text-center text-dim";
+      td.textContent = "No results for this campaign.";
+      tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+
+    for (const r of campaign) {
+      const pf  = pfMap[r.email] || null;
+      const tr  = document.createElement("tr");
+
+      // Recipient
+      const tdEmail = document.createElement("td");
+      tdEmail.textContent = r.email || "";
+      tr.appendChild(tdEmail);
+
+      // App status badge
+      const tdApp = document.createElement("td");
+      tdApp.appendChild(makeBadge(
+        r.status === "sent"    ? "success" :
+        r.status === "failed"  ? "error"   : "text-dim",
+        (r.status || "").toUpperCase()
+      ));
+      tr.appendChild(tdApp);
+
+      // Postfix status badge
+      const tdPf = document.createElement("td");
+      if (pf) {
+        const pfCls = pf.status === "sent" ? "badge-pf-sent" : pf.status === "bounced" ? "badge-pf-bounced" : "badge-pf-deferred";
+        const sp = document.createElement("span");
+        sp.className = `badge ${pfCls}`;
+        sp.textContent = pf.status.toUpperCase();
+        tdPf.appendChild(sp);
+      } else {
+        tdPf.appendChild(makeBadge("text-dim", "PENDING"));
+      }
+      tr.appendChild(tdPf);
+
+      // Relay
+      const tdRelay = document.createElement("td");
+      tdRelay.textContent = pf ? pf.relay : "";
+      tr.appendChild(tdRelay);
+
+      // DSN
+      const tdDsn = document.createElement("td");
+      tdDsn.textContent = pf ? pf.dsn : "";
+      tr.appendChild(tdDsn);
+
+      // Details button
+      const tdDetails = document.createElement("td");
+      if (r.error || (pf && pf.message)) {
+        const btn = document.createElement("button");
+        btn.className = "btn btn-secondary btn-sm";
+        btn.textContent = "▶";
+        btn.title = "Show details";
+        btn.addEventListener("click", () => {
+          const existing = tr.nextElementSibling;
+          if (existing && existing.classList.contains("analytics-detail-row")) {
+            existing.remove(); btn.textContent = "▶";
+          } else {
+            const det = document.createElement("tr");
+            det.className = "analytics-detail-row";
+            const detTd = document.createElement("td");
+            detTd.colSpan = 6;
+            const parts = [];
+            if (r.error)       parts.push(`App error: ${r.error}`);
+            if (pf?.message)   parts.push(`Postfix: ${pf.message}`);
+            if (r.smtpLabel)   parts.push(`SMTP: ${r.smtpLabel}`);
+            if (r.fromEmail)   parts.push(`From: ${r.fromEmail}`);
+            if (r.created_at)  parts.push(`At: ${r.created_at}`);
+            detTd.textContent = parts.join("  |  ");
+            det.appendChild(detTd);
+            tr.after(det);
+            btn.textContent = "▼";
+          }
+        });
+        tdDetails.appendChild(btn);
+      }
+      tr.appendChild(tdDetails);
+
+      tbody.appendChild(tr);
+    }
+  }
+
+  document.getElementById("btn-load-analytics")?.addEventListener("click", () => {
+    const sel = document.getElementById("analytics-campaign-select");
+    loadAnalytics(sel ? sel.value : "default");
+  });
+  document.getElementById("analytics-campaign-select")?.addEventListener("change", (e) => {
+    loadAnalytics(e.target.value);
+  });
+
   // ── Initial Load ────────────────────────────────────────────────────────────
   loadSettings();
   loadWizardOptions();
+  loadAnalyticsCampaigns();
   drawChart(0, 0, 0);
 });

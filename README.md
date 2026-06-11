@@ -230,9 +230,25 @@ Configure before launching:
 
 - Recipient file, names file, subjects file, HTML body file(s)
 - SMTP config file (`smtp.txt`) or direct-to-MX (no smtp.txt needed)
-- Optional attachments
+- **Display Name Override** — type a fixed display name (e.g. `Sarah Miller`) that appears in the `From:` field for every recipient. Leave blank to rotate names from `names.txt`.
+- **Reply-To** — custom reply-to address. When set, replies from recipients go to this address instead of the `From:` address.
+- Optional attachments with **Attachment Auto-Rename** (see below)
 - Rotate sender every N emails
 - Resume mode (skip already-sent addresses)
+
+#### Attachment Auto-Rename
+
+When attachments are selected, an **Attachment Rename Mode** option appears:
+
+| Mode | Filename result |
+|------|----------------|
+| **None** (default) | Original filename — all recipients get the same name |
+| **Subject-based** | Sanitised email subject used as the filename: `Invoice_for_example_com.pdf` |
+| **Random** | Custom prefix + unique 6-character hex suffix: `Proposal-a3f9c1.pdf` |
+
+In **Random** mode, enter a **Custom Prefix** (letters, numbers, `_`, `-` — max 40 chars). Each recipient receives a uniquely named file; the file bytes on disk are never copied.
+
+A live preview of the filename format is shown while you type the prefix.
 
 ### Domain Scanner Tab
 
@@ -614,7 +630,7 @@ Three modes control the `From:` address recipients see. Switch between them in t
 | **Fixed** | Every recipient gets the same `From:` address — specify it in "Fixed From Email" |
 | **Unique per recipient** | A random local-part is generated per recipient: `j.smith47@yourdomain.com`, `alex.white@yourdomain.com`, etc. You specify the domain. |
 
-The **Sender Preview** box at the bottom of the Campaign Wizard shows both the current `From:` and `Sender:` values before you launch.
+The **Sender Preview** box at the bottom of the Campaign Wizard shows the current `From:` (including display name), `Sender:`, and `Reply-To` values before you launch.
 
 ---
 
@@ -645,7 +661,7 @@ Any format — the tool auto-extracts valid email addresses via regex.
 One per line. Rotates round-robin across recipients.
 
 ### `names.txt` — Display Names
-One per line. Rotates alongside subjects.
+One per line. Rotates alongside subjects. Overridden by the **Display Name Override** field in the Campaign Wizard when set.
 
 ### `body.html` — Email Body
 Standard HTML with optional template variables. Multiple body files rotate per recipient (select them in the Campaign Wizard).

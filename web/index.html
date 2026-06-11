@@ -235,6 +235,42 @@
           <div id="postfix-queue-content" class="postfix-queue-content"></div>
           <div id="postfix-logs-content" class="postfix-logs-content" style="display:none"></div>
         </div>
+
+        <!-- Delivery Analytics -->
+        <div class="panel analytics-panel">
+          <div class="postfix-panel-header">
+            <div>
+              <h3>Delivery Analytics</h3>
+              <p class="section-desc">Per-recipient delivery status combining campaign results and live Postfix mail log events.</p>
+            </div>
+            <div class="postfix-panel-actions">
+              <select id="analytics-campaign-select" class="form-control form-control-sm" title="Select campaign to view"></select>
+              <button id="btn-load-analytics" class="btn btn-secondary" title="Refresh analytics data">Refresh</button>
+              <label class="checkbox-label" style="margin:0 0 0 8px">
+                <input type="checkbox" id="analytics-live-toggle" checked> Live
+              </label>
+            </div>
+          </div>
+          <div class="analytics-summary" id="analytics-summary"></div>
+          <div id="analytics-hints" class="analytics-hints"></div>
+          <div class="table-container">
+            <table class="analytics-table">
+              <thead>
+                <tr>
+                  <th>Recipient</th>
+                  <th>App Status</th>
+                  <th>Postfix Status</th>
+                  <th>Relay</th>
+                  <th>DSN</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="analytics-tbody">
+                <tr><td colspan="6" class="text-center text-dim">Select a campaign and click Refresh to load analytics.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- Tab Content: Campaign Wizard -->
@@ -324,12 +360,12 @@
               </div>
             </div>
 
-            <div class="form-group domain-rotation-group">
-              <div class="checkbox-wrapper">
-                <input type="checkbox" id="wizard-domain-rotation" title="Randomize the From: domain per email using all configured Sending Domains — requires DKIM keys for each domain">
-                <label for="wizard-domain-rotation" class="checkbox-label">🔀 Rotate sending domains (randomize From: domain per email)</label>
+            <div class="form-group">
+              <label>Sending Domains <span class="text-dim" style="font-weight:normal;font-size:0.85em">— select which domains to rotate per email</span></label>
+              <div class="checkbox-list" id="wizard-domains-container">
+                <span class="text-dim">Loading domains…</span>
               </div>
-              <small class="form-hint" id="domain-rotation-hint">Uses all configured domains from the <a href="#" class="nav-link-inline" data-tab="sending-domains">Sending Domains</a> tab. The local part of the From address stays the same; only the domain rotates. Requires DKIM keys to be generated for each domain.</small>
+              <small class="form-hint">Checked domains rotate randomly per email. <strong>SMTP list</strong>: local part stays, only domain changes. <strong>Unique per recipient</strong>: both local part and domain are randomized. <strong>Fixed</strong>: domain pool ignored. Requires DKIM keys. <a href="#" class="nav-link-inline" data-tab="sending-domains">Manage domains →</a></small>
             </div>
 
             <div class="form-group">
@@ -366,8 +402,13 @@
 
               <!-- Unique/dynamic mode input -->
               <div id="dynamic-from-domain-group" style="display:none; margin-top:8px;">
-                <input type="text" id="wizard-dynamic-from-domain" class="form-control" placeholder="send.yourdomain.com" title="Domain for unique per-recipient addresses — e.g. yourdomain.com generates j.smith47@yourdomain.com. Must have DKIM keys in Sending Domains.">
-                <small class="form-hint">Each recipient gets a unique address, e.g. <em>j.smith47@send.yourdomain.com</em>. The domain must have DKIM keys in the Sending Domains tab.</small>
+                <div id="dynamic-from-input">
+                  <input type="text" id="wizard-dynamic-from-domain" class="form-control" placeholder="send.yourdomain.com" title="Domain for unique per-recipient addresses — e.g. yourdomain.com generates j.smith47@yourdomain.com. Must have DKIM keys in Sending Domains.">
+                  <small class="form-hint">Each recipient gets a unique address, e.g. <em>j.smith47@send.yourdomain.com</em>. The domain must have DKIM keys in the Sending Domains tab.</small>
+                </div>
+                <div id="dynamic-pool-note" style="display:none">
+                  <small class="form-hint"><strong>Domain pool active</strong> — the domains checked above rotate randomly per recipient. The manual domain field is overridden.</small>
+                </div>
               </div>
             </div>
 
@@ -379,8 +420,8 @@
               </div>
               <div class="form-group">
                 <label for="wizard-names-file">Display Names File</label>
-                <select id="wizard-names-file" class="form-control" title="Sender display names — rotated round-robin per recipient (used when Display Name field above is blank)"></select>
-                <small class="form-hint">Fallback name rotation when Display Name is blank</small>
+                <select id="wizard-names-file" class="form-control" title="Rotate display names round-robin from a file — selecting a file clears the override field above"></select>
+                <small class="form-hint">Names rotate per recipient. Selecting a file clears the Display Name field above.</small>
               </div>
             </div>
 
@@ -463,29 +504,67 @@
       <section class="tab-content" id="tab-smtp-scanner">
         <div class="scanner-layout">
           <div class="panel scanner-input-panel">
-            <h2>Domain Auth Pre-Scanner</h2>
-            <p class="section-desc">Reads candidates from a list, verifies MX records, checks SPF and DMARC strength, tests outbound Port 25 connectivity, and exports to `smtp.txt`.</p>
-            
-            <div class="form-group">
-              <label for="scan-source-file">Sender Source List</label>
-              <select id="scan-source-file" class="form-control" title="mxemails.txt — list of candidate sender addresses to scan for MX, port 25, SPF, and DMARC"></select>
-              <small class="form-hint">Select a file containing sender email addresses (e.g. mxemails.txt)</small>
+            <h2>Pre-Scanner</h2>
+            <p class="section-desc">Verify MX records, SPF, DMARC, and port 25 for domains or IPs, then export usable entries to smtp.txt.</p>
+
+            <!-- Mode Toggle -->
+            <div class="scan-mode-toggle">
+              <button class="mode-btn active" id="mode-btn-domain" data-mode="domain">Domain Scan</button>
+              <button class="mode-btn"        id="mode-btn-ip"     data-mode="ip">IP Scan</button>
             </div>
 
-            <div class="form-group">
-              <label>Scan Options</label>
-              <div class="checkbox-wrapper">
-                <input type="checkbox" id="scan-include-weak" checked title="Include domains with soft SPF or no DMARC enforcement — use with caution, may reduce deliverability">
-                <label for="scan-include-weak" class="checkbox-label">Include WEAK domains (soft SPF / no DMARC enforce)</label>
+            <!-- Domain scan controls -->
+            <div id="domain-scan-controls">
+              <div class="form-group">
+                <label for="scan-source-file">Sender Source List</label>
+                <select id="scan-source-file" class="form-control" title="mxemails.txt — list of candidate sender addresses to scan for MX, port 25, SPF, and DMARC"></select>
+                <small class="form-hint">Select a file containing sender email addresses (e.g. mxemails.txt)</small>
               </div>
+
+              <div class="form-group">
+                <label>Scan Options</label>
+                <div class="checkbox-wrapper">
+                  <input type="checkbox" id="scan-include-weak" checked title="Include domains with soft SPF or no DMARC enforcement — use with caution, may reduce deliverability">
+                  <label for="scan-include-weak" class="checkbox-label">Include WEAK domains (soft SPF / no DMARC enforce)</label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="scan-output-file">Output Config File</label>
+                <input type="text" id="scan-output-file" class="form-control" value="smtp.txt" title="File to write usable SMTP entries into after the scan completes">
+              </div>
+
+              <button id="btn-trigger-scan" class="btn btn-primary btn-glow" title="Scan all sender domains for MX records, port 25 reachability, SPF, and DMARC">Start Auth &amp; Port 25 Scan</button>
             </div>
 
-            <div class="form-group">
-              <label for="scan-output-file">Output Config File</label>
-              <input type="text" id="scan-output-file" class="form-control" value="smtp.txt" title="File to write usable SMTP entries into after the scan completes">
-            </div>
+            <!-- IP scan controls -->
+            <div id="ip-scan-controls" style="display:none">
+              <div class="form-group">
+                <label for="ip-scan-textarea">IP Addresses <span class="text-dim">(one per line)</span></label>
+                <textarea id="ip-scan-textarea" class="form-control" rows="6" placeholder="1.2.3.4&#10;5.6.7.8&#10;..."></textarea>
+                <small class="form-hint">Paste IPv4 addresses to check as potential SMTP senders.</small>
+              </div>
 
-            <button id="btn-trigger-scan" class="btn btn-primary btn-glow" title="Scan all sender domains for MX records, port 25 reachability, SPF, and DMARC">Start Auth & Port 25 Scan</button>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="ip-scan-file-upload">Upload IP List (.txt)</label>
+                  <input type="file" id="ip-scan-file-upload" accept=".txt" class="form-control" title="Text file with one IP per line">
+                </div>
+                <div class="form-group">
+                  <label for="ip-scan-output">Output Config File</label>
+                  <input type="text" id="ip-scan-output" class="form-control" value="smtp.txt">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <div class="checkbox-wrapper">
+                  <input type="checkbox" id="ip-scan-include-weak" title="Include IPs with open port 25 even without a PTR record">
+                  <label for="ip-scan-include-weak" class="checkbox-label">Include weak IPs (port 25 open, no PTR record)</label>
+                </div>
+              </div>
+
+              <button id="btn-trigger-ip-scan" class="btn btn-primary btn-glow">Scan IPs</button>
+            </div>
           </div>
 
           <!-- Scan Progress & Results -->
@@ -496,7 +575,7 @@
             </div>
             <div class="table-container">
               <table class="scan-results-table">
-                <thead>
+                <thead id="scan-results-thead">
                   <tr>
                     <th>Domain</th>
                     <th>MX Server</th>
@@ -508,7 +587,7 @@
                 </thead>
                 <tbody id="scan-results-tbody">
                   <tr>
-                    <td colspan="6" class="text-center text-dim">No scan performed yet. Choose a file and click Scan.</td>
+                    <td colspan="6" class="text-center text-dim">No scan performed yet. Choose a source and click Scan.</td>
                   </tr>
                 </tbody>
               </table>
