@@ -243,6 +243,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (dynEl) dynEl.value = wiz.dynamicFromDomain;
       }
 
+      const renModeEl   = document.getElementById("wizard-attachment-rename-mode");
+      const renPrefixEl = document.getElementById("wizard-attachment-rename-prefix");
+      if (renModeEl   && wiz.attachmentRenameMode)   renModeEl.value   = wiz.attachmentRenameMode;
+      if (renPrefixEl && wiz.attachmentRenamePrefix) renPrefixEl.value = wiz.attachmentRenamePrefix;
+      updateAttachmentRenameUI();
+
       if (bodiesContainer.children.length === 0) {
         bodiesContainer.innerHTML = `<span class="text-dim text-center">No HTML templates found. Copy templates into workspace.</span>`;
       }
@@ -322,6 +328,39 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("wizard-from-name-override")?.addEventListener("input", updateSenderPreview);
   document.getElementById("wizard-reply-to")?.addEventListener("input", updateSenderPreview);
 
+  // ── Attachment rename UI ───────────────────────────────────────────────────
+  function updateAttachmentRenameUI() {
+    const anyChecked   = Array.from(document.querySelectorAll('#wizard-attachments-container input[type="checkbox"]')).some(cb => cb.checked);
+    const renameSection = document.getElementById("attachment-rename-section");
+    const prefixGroup   = document.getElementById("attachment-prefix-group");
+    const modeEl        = document.getElementById("wizard-attachment-rename-mode");
+    const prefixEl      = document.getElementById("wizard-attachment-rename-prefix");
+    const previewEl     = document.getElementById("attachment-rename-preview");
+    if (!renameSection) return;
+
+    renameSection.style.display = anyChecked ? "" : "none";
+    if (!anyChecked || !modeEl) return;
+
+    const isRandom = modeEl.value === "random";
+    if (prefixGroup) prefixGroup.style.display = isRandom ? "" : "none";
+
+    if (isRandom && previewEl) {
+      const pfx = (prefixEl && prefixEl.value.trim()) || "Prefix";
+      previewEl.textContent = `${pfx}-a3f9c1.ext`;
+    }
+  }
+
+  // Delegated listener on the container — survives innerHTML clears, fires once per session
+  document.getElementById("wizard-attachments-container")?.addEventListener("change", e => {
+    if (e.target.type === "checkbox") updateAttachmentRenameUI();
+  });
+  document.getElementById("wizard-attachment-rename-mode")?.addEventListener("change", updateAttachmentRenameUI);
+  document.getElementById("wizard-attachment-rename-prefix")?.addEventListener("input", () => {
+    const previewEl = document.getElementById("attachment-rename-preview");
+    const pfx = document.getElementById("wizard-attachment-rename-prefix").value.trim() || "Prefix";
+    if (previewEl) previewEl.textContent = `${pfx}-a3f9c1.ext`;
+  });
+
   wizardForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const checkedBodies = Array.from(document.querySelectorAll('input[name="htmlBodies"]:checked')).map(el => el.value);
@@ -349,8 +388,10 @@ document.addEventListener("DOMContentLoaded", () => {
       fromEmailOverride: fromMode === "fixed"
         ? (document.getElementById("wizard-fixed-from-email").value.trim() || "")
         : "",
-      fromNameOverride: document.getElementById("wizard-from-name-override").value.trim(),
-      replyTo:          document.getElementById("wizard-reply-to").value.trim(),
+      fromNameOverride:       document.getElementById("wizard-from-name-override").value.trim(),
+      replyTo:                document.getElementById("wizard-reply-to").value.trim(),
+      attachmentRenameMode:   document.getElementById("wizard-attachment-rename-mode").value,
+      attachmentRenamePrefix: document.getElementById("wizard-attachment-rename-prefix").value.trim(),
     };
 
     try {

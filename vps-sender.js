@@ -838,8 +838,9 @@ async function startWebServer() {
           body.tlsRejectUnauthorized = !!body.tlsRejectUnauthorized;
         }
         if (body.heloHost !== undefined) {
-          // Strip newlines to prevent SMTP command injection via EHLO
-          body.heloHost = String(body.heloHost).replace(/[\r\n]/g, "").trim();
+          const h = String(body.heloHost).replace(/[\r\n]/g, "").trim();
+          // Must be a valid hostname or empty — prevents SMTP command injection via EHLO
+          body.heloHost = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(h) ? h : "";
         }
         if (body.unsubscribeBaseUrl !== undefined) {
           body.unsubscribeBaseUrl = String(body.unsubscribeBaseUrl).replace(/[\r\n]/g, "").trim();
@@ -868,10 +869,12 @@ async function startWebServer() {
           else body.relayPass = String(body.relayPass);
         }
         if (body.envelopeDomain !== undefined) {
-          body.envelopeDomain = String(body.envelopeDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+          const ed = String(body.envelopeDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+          body.envelopeDomain = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(ed) ? ed : "";
         }
         if (body.panelDomain !== undefined) {
-          body.panelDomain = String(body.panelDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+          const pd = String(body.panelDomain).replace(/[\r\n]/g, "").trim().toLowerCase();
+          body.panelDomain = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/.test(pd) ? pd : "";
         }
         if (body.relayTlsRejectUnauthorized !== undefined) {
           body.relayTlsRejectUnauthorized = !!body.relayTlsRejectUnauthorized;
@@ -957,10 +960,12 @@ async function startWebServer() {
           files: textFiles,
           attachments: binaryFiles,
           campaignWizard: {
-            fromNameOverride: webCampaignConfig.fromNameOverride || "",
-            replyTo:          webCampaignConfig.replyTo          || "",
-            fromEmailOverride: webCampaignConfig.fromEmailOverride || "",
-            dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "",
+            fromNameOverride:       webCampaignConfig.fromNameOverride       || "",
+            replyTo:                webCampaignConfig.replyTo                || "",
+            fromEmailOverride:      webCampaignConfig.fromEmailOverride      || "",
+            dynamicFromDomain:      webCampaignConfig.dynamicFromDomain      || "",
+            attachmentRenameMode:   webCampaignConfig.attachmentRenameMode   || "none",
+            attachmentRenamePrefix: webCampaignConfig.attachmentRenamePrefix || "",
           },
         }));
         return;
@@ -1144,6 +1149,8 @@ async function startWebServer() {
         if (body.fromEmailOverride !== undefined) safe.fromEmailOverride = String(body.fromEmailOverride || "").replace(/[\r\n]/g, "").trim();
         if (body.fromNameOverride  !== undefined) safe.fromNameOverride  = String(body.fromNameOverride  || "").replace(/[\r\n"\\]/g, "").trim();
         if (body.replyTo           !== undefined) safe.replyTo           = String(body.replyTo           || "").replace(/[\r\n]/g, "").trim();
+        if (body.attachmentRenameMode   !== undefined) safe.attachmentRenameMode   = ["none","subject","random"].includes(body.attachmentRenameMode) ? body.attachmentRenameMode : "none";
+        if (body.attachmentRenamePrefix !== undefined) safe.attachmentRenamePrefix = String(body.attachmentRenamePrefix || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40);
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1236,6 +1243,7 @@ async function startWebServer() {
             subject: "Test Email — VPS Sender",
             html: "<p>This is a test email sent from your VPS Sender panel.</p>",
             attachments: [], config: cfg, templateVars: { email: toAddr, domain: toAddr.split("@")[1], name: "Test" },
+            replyTo: webCampaignConfig.replyTo || "",
           });
         } catch (buildErr) {
           res.writeHead(500, { "Content-Type": "application/json" });
@@ -1267,7 +1275,16 @@ async function startWebServer() {
       if (req.method === "POST" && pathname === "/api/blacklist-check") {
         const { checkAllBlacklists } = require("./lib/scanner/blacklist");
         let ip = "";
-        try { ip = await detectSendingIp(); } catch { /* ignore */ }
+        try { ip = await detectSendingIp(); } catch (e) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Could not detect sending IP: " + e.message, listed: [], clean: [], errors: [], ip: "" }));
+          return;
+        }
+        if (!ip) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Sending IP detection returned empty", listed: [], clean: [], errors: [], ip: "" }));
+          return;
+        }
         const result = await checkAllBlacklists(ip);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
@@ -1278,7 +1295,7 @@ async function startWebServer() {
         const { getDb } = require("./lib/campaign/state");
         const db = getDb();
         if (db) db.prepare("DELETE FROM campaign_results").run();
-        const csvPath = config.resultsFile || "results.csv";
+        const csvPath = getCachedConfig().resultsFile || "results.csv";
         if (fs.existsSync(csvPath)) fs.unlinkSync(csvPath);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
@@ -1327,8 +1344,18 @@ async function startWebServer() {
         for (const lp of logCandidates) {
           if (fs.existsSync(lp)) {
             try {
-              const data = fs.readFileSync(lp, "utf8");
-              lines = data.split("\n").filter(Boolean).slice(-200);
+              const stat = fs.statSync(lp);
+              const LOG_MAX = 5 * 1024 * 1024; // 5 MB — prevent OOM on large logs
+              if (stat.size > LOG_MAX) {
+                // Read only the last 5 MB of a large log file
+                const fd = fs.openSync(lp, "r");
+                const buf = Buffer.alloc(LOG_MAX);
+                fs.readSync(fd, buf, 0, LOG_MAX, stat.size - LOG_MAX);
+                fs.closeSync(fd);
+                lines = buf.toString("utf8").split("\n").filter(Boolean).slice(-200);
+              } else {
+                lines = fs.readFileSync(lp, "utf8").split("\n").filter(Boolean).slice(-200);
+              }
               break;
             } catch { /* permission denied — try journalctl */ }
           }
@@ -1376,13 +1403,15 @@ async function startWebServer() {
         const privPem = privateKey.export({ type: "pkcs8", format: "pem" });
         const pubDer  = publicKey.export({ type: "spki", format: "der" }).toString("base64").replace(/\n/g, "");
 
-        const dkimDir = path.join(__dirname, "dkim");
+        const dkimDir  = path.join(__dirname, "dkim");
         if (!fs.existsSync(dkimDir)) fs.mkdirSync(dkimDir, { mode: 0o700 });
-        fs.writeFileSync(path.join(dkimDir, `${domain}.pem`), privPem, { mode: 0o600 });
+        const pemFile  = path.basename(`${domain}.pem`);
+        const pemPath  = path.join(dkimDir, pemFile);
+        fs.writeFileSync(pemPath, privPem, { mode: 0o600 });
 
         const cfg  = loadConfig();
         const dkim = { ...(cfg.dkim || {}) };
-        dkim[domain] = { domainName: domain, keySelector: selector, privateKeyPath: `dkim/${domain}.pem` };
+        dkim[domain] = { domainName: domain, keySelector: selector, privateKeyPath: `dkim/${pemFile}` };
         saveConfig({ dkim });
 
         let sendingIp = "";
@@ -1625,8 +1654,10 @@ let webCampaignConfig = {
   domainRotation:    false,
   dynamicFromDomain: "",
   fromEmailOverride: "",
-  fromNameOverride:  "",
-  replyTo:           "",
+  fromNameOverride:       "",
+  replyTo:                "",
+  attachmentRenameMode:   "none",
+  attachmentRenamePrefix: "",
 };
 
 async function runWebScanner(emails, includeWeak, outputFile) {
@@ -1738,7 +1769,7 @@ async function runWebCampaign() {
     attachments,
     allEmails,
     domainPool,
-    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", fromNameOverride: webCampaignConfig.fromNameOverride || "", replyTo: webCampaignConfig.replyTo || "", _proxy: PROXY },
+    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", fromNameOverride: webCampaignConfig.fromNameOverride || "", replyTo: webCampaignConfig.replyTo || "", attachmentRenameMode: webCampaignConfig.attachmentRenameMode || "none", attachmentRenamePrefix: webCampaignConfig.attachmentRenamePrefix || "", _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,
     onProgress: s => {
