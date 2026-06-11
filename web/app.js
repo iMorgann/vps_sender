@@ -8,7 +8,8 @@ document.addEventListener("DOMContentLoaded", () => {
     attachments: [],
     selectedFile: null,
     campaignRunning: false,
-    campaignStats: { total: 0, sent: 0, failed: 0, greylisted: 0, reachable: 0, dropped: 0 }
+    campaignStats: { total: 0, sent: 0, failed: 0, greylisted: 0, reachable: 0, dropped: 0 },
+    smtpFileSenders: [],
   };
 
   // ── API Token + Fetch Helper ────────────────────────────────────────────────
@@ -306,6 +307,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (attachmentsContainer.children.length === 0) {
         attachmentsContainer.innerHTML = `<span class="text-dim text-center">No attachments found in directory.</span>`;
       }
+
+      // Load SMTP file senders so Sender preview shows real fromEmail values on page load
+      loadSmtpFileSenders(smtpSelect.value);
   }
 
   async function loadWizardOptions() {
@@ -374,9 +378,42 @@ document.addEventListener("DOMContentLoaded", () => {
       fromEl.className   = "sender-preview-value text-dim";
     }
 
-    const relayFrom = document.getElementById("settings-relay-from-email")?.value.trim() || "";
-    senderEl.textContent = relayFrom || "not set — configure in Settings → Transport & Relay";
-    senderEl.className   = "sender-preview-value" + (relayFrom ? "" : " text-dim");
+    const smtpFile      = document.getElementById("wizard-smtp-file")?.value || "direct";
+    const relayFrom     = document.getElementById("settings-relay-from-email")?.value.trim() || "";
+    const checkedDomains = Array.from(document.querySelectorAll('input[name="sendingDomains"]:checked')).map(el => el.value);
+    let senderText, senderDim;
+    if (relayFrom) {
+      // Relay From Email explicitly set — always overrides the envelope sender
+      senderText = relayFrom;
+      senderDim  = false;
+    } else if (checkedDomains.length) {
+      // Verified sending domains selected — engine uses these domains for fromEmail,
+      // replacing the smtp.txt domain. Show the actual verified domains.
+      const localPart = (state.smtpFileSenders[0] || "").split("@")[0] || "sender";
+      senderText = checkedDomains.length === 1
+        ? `${localPart}@${checkedDomains[0]}`
+        : `rotating: ${checkedDomains.map(d => `${localPart}@${d}`).join(", ")}`;
+      senderDim  = false;
+    } else if (smtpFile !== "direct") {
+      // No domains, no override — envelope sender defaults to fromEmail in the SMTP file
+      const senders = state.smtpFileSenders || [];
+      if (senders.length === 1) {
+        senderText = senders[0];
+        senderDim  = false;
+      } else if (senders.length > 1) {
+        senderText = `rotating: ${senders.join(", ")}`;
+        senderDim  = false;
+      } else {
+        senderText = `fromEmail(s) in ${smtpFile}`;
+        senderDim  = true;
+      }
+    } else {
+      // Direct-to-MX, no relay override — envelope = From address
+      senderText = "(same as From address)";
+      senderDim  = true;
+    }
+    senderEl.textContent = senderText;
+    senderEl.className   = "sender-preview-value" + (senderDim ? " text-dim" : "");
 
     const replyTo    = document.getElementById("wizard-reply-to")?.value.trim() || "";
     const rtRow      = document.getElementById("preview-replyto-row");
@@ -386,6 +423,42 @@ document.addEventListener("DOMContentLoaded", () => {
       rtVal.textContent   = replyTo;
     }
   }
+
+  // Parse SMTP INI file text → array of fromEmail strings (one per enabled entry)
+  function parseSmtpFileEntries(text) {
+    const entries = [];
+    let cur = null;
+    for (const line of text.split(/\r?\n/)) {
+      const t = line.trim();
+      if (/^\[SMTP\.\d+\]/i.test(t)) { cur = {}; entries.push(cur); continue; }
+      if (!cur) continue;
+      const m = t.match(/^(\w+)\s*=\s*(.*)/);
+      if (m) cur[m[1].toLowerCase()] = m[2].trim();
+    }
+    return entries.filter(e => e.enabled !== "false").map(e => e.fromemail || "").filter(Boolean);
+  }
+
+  async function loadSmtpFileSenders(filename) {
+    if (!filename || filename === "direct") {
+      state.smtpFileSenders = [];
+      updateSenderPreview();
+      return;
+    }
+    try {
+      const res  = await apiFetch(`/api/files/read?name=${encodeURIComponent(filename)}`);
+      const data = await res.json();
+      state.smtpFileSenders = parseSmtpFileEntries(data.content || "");
+    } catch {
+      state.smtpFileSenders = [];
+    }
+    updateSenderPreview();
+  }
+
+  document.getElementById("wizard-smtp-file")?.addEventListener("change", e => {
+    loadSmtpFileSenders(e.target.value);
+  });
+
+  document.getElementById("settings-relay-from-email")?.addEventListener("input", updateSenderPreview);
 
   document.getElementById("wizard-fixed-from-email")?.addEventListener("input", updateSenderPreview);
   document.getElementById("wizard-dynamic-from-domain")?.addEventListener("input", updateSenderPreview);

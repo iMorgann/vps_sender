@@ -1208,6 +1208,8 @@ async function startWebServer() {
         if (body.replyTo           !== undefined) safe.replyTo           = String(body.replyTo           || "").replace(/[\r\n]/g, "").trim();
         if (body.attachmentRenameMode   !== undefined) safe.attachmentRenameMode   = ["none","subject","random"].includes(body.attachmentRenameMode) ? body.attachmentRenameMode : "none";
         if (body.attachmentRenamePrefix !== undefined) safe.attachmentRenamePrefix = String(body.attachmentRenamePrefix || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40);
+        // Mutual exclusion: a names file always takes priority over fromNameOverride
+        if (safe.namesFile) safe.fromNameOverride = "";
         Object.assign(webCampaignConfig, safe);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -1970,7 +1972,10 @@ async function runWebCampaign() {
     attachments,
     allEmails,
     domainPool,
-    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "", fromNameOverride: webCampaignConfig.fromNameOverride || "", replyTo: webCampaignConfig.replyTo || "", attachmentRenameMode: webCampaignConfig.attachmentRenameMode || "none", attachmentRenamePrefix: webCampaignConfig.attachmentRenamePrefix || "", _proxy: PROXY },
+    config:      { ...cfg, rotEvery: webCampaignConfig.rotEvery, dynamicFromDomain: webCampaignConfig.dynamicFromDomain || "", fromEmailOverride: webCampaignConfig.fromEmailOverride || "",
+                   // namesFile takes priority: if a names file is loaded, never use the override
+                   fromNameOverride: webCampaignConfig.namesFile ? "" : (webCampaignConfig.fromNameOverride || ""),
+                   replyTo: webCampaignConfig.replyTo || "", attachmentRenameMode: webCampaignConfig.attachmentRenameMode || "none", attachmentRenamePrefix: webCampaignConfig.attachmentRenamePrefix || "", _proxy: PROXY },
     campaignId,
     cancelToken: campaignCancelToken,
     onProgress: s => {
