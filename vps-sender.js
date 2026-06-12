@@ -1469,12 +1469,15 @@ async function startWebServer() {
         const limit      = Math.max(1, Math.min(parseInt(url.searchParams.get("limit"), 10) || 500, 2000));
 
         // Campaign results from SQLite
-        let campaign = [];
+        let campaign = [], totalSent = 0, totalFailed = 0, allCampaignEmails = [];
         if (db) {
           try {
             campaign = db.prepare(
               "SELECT email, status, from_email AS fromEmail, subject, smtp_label AS smtpLabel, error, tls, created_at FROM campaign_results WHERE campaign_id = ? ORDER BY id DESC LIMIT ?"
             ).all(campaignId, limit);
+            totalSent   = db.prepare("SELECT COUNT(*) AS n FROM campaign_results WHERE campaign_id = ? AND status = 'sent'").get(campaignId).n;
+            totalFailed = db.prepare("SELECT COUNT(*) AS n FROM campaign_results WHERE campaign_id = ? AND status = 'failed'").get(campaignId).n;
+            allCampaignEmails = db.prepare("SELECT email FROM campaign_results WHERE campaign_id = ?").all(campaignId).map(r => r.email);
           } catch { /* DB not ready */ }
         }
 
@@ -1503,7 +1506,7 @@ async function startWebServer() {
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ campaign, postfix }));
+        res.end(JSON.stringify({ campaign, postfix, totalSent, totalFailed, allCampaignEmails }));
         return;
       }
 
@@ -1984,7 +1987,7 @@ async function runWebCampaign() {
         return;
       }
       engineState = { ...engineState, ...s };
-      broadcastSSE({ type: "campaign_progress", stats: s, speed: s.speed, elapsed: s.elapsed, eta: s.eta, current: s.current });
+      broadcastSSE({ type: "campaign_progress", transport: cfg.transport || "direct", stats: s, speed: s.speed, elapsed: s.elapsed, eta: s.eta, current: s.current });
     },
     onLog: (text, logClass) => broadcastSSE({ type: "log", text, logClass }),
   });
@@ -1993,6 +1996,7 @@ async function runWebCampaign() {
   const totalSent = newSent + (stats.alreadySent || 0);
   broadcastSSE({
     type: "campaign_progress",
+    transport: cfg.transport || "direct",
     stats: {
       ...stats,
       sent:      totalSent,                         // cumulative (new + resumed)

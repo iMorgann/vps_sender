@@ -10,6 +10,8 @@ document.addEventListener("DOMContentLoaded", () => {
     campaignRunning: false,
     campaignStats: { total: 0, sent: 0, failed: 0, greylisted: 0, reachable: 0, dropped: 0 },
     smtpFileSenders: [],
+    isRelayMode: false,
+    pfStats: { bounced: 0, deferred: 0 },
   };
 
   // ── API Token + Fetch Helper ────────────────────────────────────────────────
@@ -100,6 +102,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (data.type === "scan_progress")     updateScanProgress(data);
       if (data.type === "campaign_progress") updateCampaignProgress(data);
       if (data.type === "postfix_analytics") {
+        for (const ev of data.events || []) {
+          if (ev.status === "bounced")  state.pfStats.bounced++;
+          if (ev.status === "deferred") state.pfStats.deferred++;
+        }
+        if (state.isRelayMode) {
+          document.getElementById("stats-failed").textContent     = state.pfStats.bounced;
+          document.getElementById("stats-greylisted").textContent = state.pfStats.deferred;
+          document.getElementById("stats-failed-pct").textContent = `${state.pfStats.bounced} PF bounced`;
+          drawChart(state.campaignStats.sent, state.pfStats.bounced, state.pfStats.deferred);
+        }
         if (document.getElementById("analytics-live-toggle")?.checked) {
           const sel = document.getElementById("analytics-campaign-select");
           loadAnalytics(sel ? sel.value : "default");
@@ -119,6 +131,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // Reset stats display when a new campaign starts so stale numbers don't persist
     if (status === "sending") {
       state.campaignStats = { total: 0, sent: 0, failed: 0, greylisted: 0, reachable: 0, dropped: 0 };
+      state.pfStats = { bounced: 0, deferred: 0 };
+      state.isRelayMode = false;
       document.getElementById("stats-total").textContent = "0";
       document.getElementById("stats-sent").textContent  = "0";
       document.getElementById("stats-failed").textContent = "0";
@@ -615,6 +629,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const stats = data.stats;
     if (!stats) return;
     state.campaignStats = stats;
+    if (data.transport) state.isRelayMode = data.transport === "relay";
 
     document.getElementById("stats-total").textContent = stats.total;
     document.getElementById("stats-total-desc").textContent = `Reachable: ${stats.reachable} | Dropped: ${stats.dropped}`;
@@ -2706,12 +2721,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const hintsEl   = document.getElementById("analytics-hints");
     if (!tbody) return;
 
-    let campaign = [], postfix = [];
+    let campaign = [], postfix = [], totalSent = null, totalFailed = null, allCampaignEmails = null;
     try {
       const res  = await apiFetch(`/api/analytics?campaignId=${encodeURIComponent(campaignId)}`);
       const data = await res.json();
-      campaign   = data.campaign || [];
-      postfix    = data.postfix  || [];
+      campaign          = data.campaign          || [];
+      postfix           = data.postfix           || [];
+      totalSent         = data.totalSent         ?? null;
+      totalFailed       = data.totalFailed       ?? null;
+      allCampaignEmails = data.allCampaignEmails || null;
     } catch (e) {
       const errTr = document.createElement("tr");
       const errTd = document.createElement("td");
@@ -2727,14 +2745,14 @@ document.addEventListener("DOMContentLoaded", () => {
       pfMap[ev.email] = ev; // later entries overwrite earlier (log is chronological)
     }
 
-    // Summary counts — Postfix stats restricted to emails in this campaign only,
-    // because pfMap contains every event in the last 5 MB of mail.log across all campaigns.
-    const campaignEmails = new Set(campaign.map(r => r.email));
-    const counts = { appSent: 0, appFailed: 0, pfSent: 0, pfBounced: 0, pfDeferred: 0 };
-    for (const r of campaign) {
-      if (r.status === "sent")   counts.appSent++;
-      if (r.status === "failed") counts.appFailed++;
-    }
+    // Use server-side totals when available; fall back to counting the paged array.
+    // campaignEmails uses the full list (allCampaignEmails) so PF stats aren't capped at 500.
+    const campaignEmails = new Set(allCampaignEmails || campaign.map(r => r.email));
+    const counts = {
+      appSent:    totalSent   !== null ? totalSent   : campaign.filter(r => r.status === "sent").length,
+      appFailed:  totalFailed !== null ? totalFailed : campaign.filter(r => r.status === "failed").length,
+      pfSent: 0, pfBounced: 0, pfDeferred: 0,
+    };
     for (const [email, ev] of Object.entries(pfMap)) {
       if (!campaignEmails.has(email)) continue;
       if (ev.status === "sent")     counts.pfSent++;
