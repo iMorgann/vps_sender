@@ -499,6 +499,64 @@ async function runScanner(cfg) {
   return { smtpEntries, outFile };
 }
 
+// ── IP Scanner CLI ─────────────────────────────────────────────────────────────
+async function runIpScannerCli(ipFile) {
+  const { scanIps } = require("./lib/scanner/ip-scanner");
+
+  let rawIps;
+  if (ipFile) {
+    if (!fs.existsSync(ipFile)) { console.log(r(`  File not found: ${ipFile}`)); process.exit(1); }
+    rawIps = fs.readFileSync(ipFile, "utf8").split(/[\r\n,\s]+/).map(s => s.trim()).filter(Boolean);
+  } else {
+    console.log(b("  ── IP Scanner ────────────────────────────────────────────────"));
+    console.log(dim("  Checks each IP for port 25, PTR record, SPF, DMARC, then saves smtp.txt\n"));
+    const ipFileInput = await pickTextFile("Pick IP list file  (one IPv4 per line)");
+    if (!ipFileInput) { console.log(r("  Cancelled.")); process.exit(0); }
+    rawIps = fs.readFileSync(ipFileInput, "utf8").split(/[\r\n,\s]+/).map(s => s.trim()).filter(Boolean);
+  }
+
+  const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+  const ips = [...new Set(rawIps.filter(s => IPV4_RE.test(s)))];
+  if (!ips.length) { console.log(r("  No valid IPv4 addresses found.")); process.exit(1); }
+
+  const weakRl = createRl();
+  const weakAns = await ask(weakRl, "Include IPs without PTR record? (yes/no)", "no");
+  weakRl.close();
+  const includeWeak = weakAns.toLowerCase().startsWith("y");
+
+  const outRl = createRl();
+  const outFile = await ask(outRl, "Save smtp config to", "smtp.txt");
+  outRl.close();
+
+  console.log(`\n  Scanning ${b(ips.length)} IP address(es) — concurrency 8…\n`);
+
+  const results = [];
+  await scanIps(ips, 8, (done, total, info) => {
+    results.push(info);
+    const icon   = info.usable ? g("✓") : (info.port25Open ? y("~") : r("✗"));
+    const ptr    = info.ptrHost ? dim(info.ptrHost) : dim("no PTR");
+    const p25    = info.port25Open ? g("port25 open") : r("port25 closed");
+    process.stdout.write(`\r  ${icon} ${info.ip.padEnd(16)} ${p25}  ${ptr}    ${dim(done + "/" + total)}\n`);
+  });
+
+  const passing = results.filter(r => includeWeak ? r.port25Open : r.usable);
+  const smtpEntries = passing.map(r => ({
+    host:      r.ptrHost || r.ip,
+    fromEmail: `postmaster@${r.domain || r.ip}`,
+  }));
+
+  if (!smtpEntries.length) {
+    console.log(`\n  ${r("No usable IPs found.")}`);
+    if (!includeWeak) console.log(dim("  Re-run and answer 'yes' to include IPs without PTR records."));
+    process.exit(1);
+  }
+
+  saveSmtpConfig(smtpEntries, outFile);
+  console.log(`\n  ${g("✓")} ${b(smtpEntries.length + " usable sender(s)")} saved to ${c(outFile)}`);
+  console.log(dim(`  Total scanned: ${results.length}  |  Usable: ${smtpEntries.length}  |  Skipped: ${results.length - smtpEntries.length}\n`));
+  return smtpEntries;
+}
+
 // ── Sender CLI ─────────────────────────────────────────────────────────────────
 async function runSender(smtpEntries, cfg) {
   if (!smtpEntries) {
@@ -2020,6 +2078,15 @@ async function main() {
     return;
   }
 
+  // --scan-ips [file]  — run IP scanner non-interactively (file is optional; prompts if omitted)
+  if (args.includes("--scan-ips")) {
+    banner();
+    const fileArg = args[args.indexOf("--scan-ips") + 1];
+    const ipFile  = fileArg && !fileArg.startsWith("--") ? fileArg : null;
+    await runIpScannerCli(ipFile);
+    return;
+  }
+
   banner();
   const cfg = loadConfig();
 
@@ -2047,7 +2114,8 @@ async function main() {
   console.log(`  ${c("1")}  Scanner only   — scan mxemails.txt → save smtp.txt`);
   console.log(`  ${c("2")}  Send only      — load smtp.txt + send to recipients`);
   console.log(`  ${c("3")}  Scan + Send    — scan then send in one run`);
-  console.log(`  ${c("4")}  Start Web GUI  — launch web dashboard (http://localhost:3000)\n`);
+  console.log(`  ${c("4")}  Start Web GUI  — launch web dashboard (http://localhost:3000)`);
+  console.log(`  ${c("5")}  IP Scanner     — scan raw IPs for port 25 + PTR → save smtp.txt\n`);
   const modeRl     = createRl();
   const modeChoice = await ask(modeRl, "Choose mode", "3");
   modeRl.close();
@@ -2058,6 +2126,14 @@ async function main() {
     await runSender(null, cfg);
   } else if (modeChoice === "4") {
     await startWebServer();
+  } else if (modeChoice === "5") {
+    const smtpEntries = await runIpScannerCli(null);
+    const sendRl  = createRl();
+    const sendAns = await ask(sendRl, "Send campaign now with these IPs? (yes/no)", "yes");
+    sendRl.close();
+    if (sendAns.toLowerCase().startsWith("y") && smtpEntries.length) {
+      await runSender(smtpEntries, cfg);
+    }
   } else {
     const { smtpEntries } = await runScanner(cfg);
     if (smtpEntries && smtpEntries.length) await runSender(smtpEntries, cfg);

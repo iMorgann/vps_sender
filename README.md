@@ -18,6 +18,13 @@ Send email with full deliverability control: **direct-to-MX** (no third-party re
 10. [Template Variables](#template-variables)
 11. [Workspace File Reference](#workspace-file-reference)
 12. [CLI Mode](#cli-mode)
+    - [Mode 1 — Domain Scanner](#mode-1--domain-scanner)
+    - [Mode 2 — Send Only](#mode-2--send-only)
+    - [Mode 3 — Scan + Send](#mode-3--scan--send-default)
+    - [Mode 5 — IP Scanner](#mode-5--ip-scanner)
+    - [CLI Config](#cli-config)
+    - [CLI in Relay Mode](#cli-in-relay-mode)
+    - [Non-interactive / Scripted](#cli-without-any-prompts-non-interactive--scripted)
 13. [Public Access & Remote Server](#public-access--remote-server)
 14. [VPS Deployment](#vps-deployment)
 15. [SOCKS5 Proxy](#socks5-proxy)
@@ -259,6 +266,36 @@ Evaluate sender domains before committing to a campaign:
 4. Saves usable entries to `smtp.txt`
 
 > In relay mode the scanner is still useful — it evaluates sender domains for SPF/DMARC strength so you know which ones are safe to use as the visible `From:`.
+
+### Delivery Analytics Tab
+
+Per-recipient view combining your campaign results with live Postfix mail log events. Accessible via the **Postfix Mail Queue** page.
+
+**Summary cards:**
+
+| Card | Source | What it shows |
+|------|--------|---------------|
+| **App Sent** | SQLite | Total emails the app successfully handed off (engine-level) |
+| **App Failed** | SQLite | Total emails the engine could not deliver |
+| **PF Delivered** | Postfix mail.log | Emails confirmed delivered by Postfix (`status=sent`) |
+| **PF Bounced** | Postfix mail.log | Hard bounces from recipient servers (`status=bounced`) |
+| **PF Deferred** | Postfix mail.log | Temporary deferrals / greylisting (`status=deferred`) |
+
+**Live toggle:** Enable the **Live** checkbox to auto-refresh the table every time a new Postfix log event arrives via SSE (every ~5 seconds).
+
+**Per-recipient table:** Shows each address with app status, Postfix delivery status, relay host, DSN code, and a details arrow for the full error message.
+
+**Delivery hints:** Warnings appear automatically when bounce rate exceeds 10% or deferral rate exceeds 20%.
+
+> In **relay mode**, App Sent will always equal your total recipients (the relay accepts immediately). Check PF Bounced and PF Deferred for the real outcome — the dashboard also reflects these via SSE when in relay mode.
+
+### Postfix Mail Queue Tab
+
+View queued and deferred messages on the local MTA:
+
+- **Refresh Queue** — re-reads the current queue
+- **Flush Deferred** — runs `postsuper -d ALL deferred` to force retry of all deferred messages
+- **View Logs** — opens a live tail of `/var/log/mail.log`
 
 ### Mail Previewer Tab
 
@@ -690,16 +727,221 @@ One email per line. Addresses in this file are silently skipped before any campa
 
 ## CLI Mode
 
+Run the full sender entirely from a terminal — no browser required. Every send feature (transport modes, DKIM, proxy, rate limits, relay) is available because CLI and web share the same campaign engine.
+
 ```bash
 npm run cli
 ```
 
-| Mode | Description |
-|------|-------------|
-| `1` Scanner only | Reads `mxemails.txt`, checks MX + port 25 + SPF + DMARC, saves `smtp.txt` |
-| `2` Send only | Loads `smtp.txt`, picks files interactively, sends |
-| `3` Scan + Send | Runs scanner then sends in one run |
-| `4` Start Web GUI | Launches the web dashboard |
+On launch you are prompted for a proxy URL (press **Enter** to skip), then a mode:
+
+```
+  1  Scanner only   — scan mxemails.txt → save smtp.txt
+  2  Send only      — load smtp.txt + send to recipients
+  3  Scan + Send    — scan then send in one run
+  4  Start Web GUI  — launch web dashboard (http://localhost:3000)
+  5  IP Scanner     — scan raw IPs for port 25 + PTR → save smtp.txt
+```
+
+---
+
+### Mode 1 — Domain Scanner
+
+Reads `mxemails.txt`, tests every sender domain for MX reachability, SPF, DMARC, and port 25, then writes passing entries to `smtp.txt`.
+
+```
+Choose mode: 1
+Pick mxemails.txt: [file picker]
+Include WEAK domains? (yes/no): no
+```
+
+When the scan finishes, `smtp.txt` is saved in the working directory.
+
+---
+
+### Mode 2 — Send Only
+
+Loads an existing `smtp.txt` (from a previous scan) and walks you through the send setup interactively:
+
+```
+Step 1  — Pick smtp.txt
+Step 2  — Health check (MX, SPF, DMARC, PTR for your sending IP)
+Step 3  — Pick names.txt  (or press Enter to skip)
+Step 4  — Pick subjects.txt
+Step 5  — Body mode:
+            1  HTML file(s)
+            2  Paste HTML
+            3  Attachment only
+            4  HTML + Attachment
+Step 6  — Pick leads file (.txt or .csv — emails are auto-extracted)
+           Or paste emails and end with a lone .
+Step 7  — Rotate SMTP every N sends  (default: 2)
+Step 8  — Confirm and start
+```
+
+Live output during send:
+```
+  ✓ [SMTP.1] alice@recipient.com sent (TLS)
+  ✗ [SMTP.2] bob@other.com 550 User unknown
+  ~ [SMTP.1] carol@example.com greylisted — retry 1 in 60s…
+```
+
+Final summary box:
+```
+  ╔══════════════════════════════════════════╗
+  ║              Results                     ║
+  ╠══════════════════════════════════════════╣
+  ║  Sent         482                        ║
+  ║  Failed         8                        ║
+  ║  Dropped        0  (port 25 blocked)     ║
+  ║  Greylisted     3  (retried)             ║
+  ╠══════════════════════════════════════════╣
+  ║  CSV → results.csv                       ║
+  ╚══════════════════════════════════════════╝
+```
+
+Results are appended to `results.csv` — re-running will skip already-sent addresses automatically (resume mode).
+
+---
+
+### Mode 3 — Scan + Send (default)
+
+Runs the scanner first, then immediately hands the resulting `smtp.txt` to the sender. Useful for a single end-to-end run without saving intermediate files.
+
+---
+
+### CLI Config
+
+All settings in `config.json` apply to CLI mode exactly as they do in web mode:
+
+| Setting | How it affects CLI |
+|---------|--------------------|
+| `transport` | `"direct"` or `"relay"` — CLI uses the same engine path |
+| `sendingIp` | Binds outbound SMTP socket to this IP in direct mode |
+| `relayHost / relayPort` | Used when `transport = "relay"` |
+| `proxyUrl` | Pre-filled at the CLI proxy prompt; you can change it per run |
+| `concurrency` | Number of parallel workers |
+| `sendDelay` | Milliseconds between sends |
+| `greylistWait` | Retry wait on 4xx responses |
+| `dkim` | DKIM signing is applied automatically if keys are configured |
+| `rateLimits` | Per-provider token-bucket caps — enforced identically to web mode |
+| `resultsFile` | CSV file path for delivery log (default: `results.csv`) |
+
+Edit `config.json` directly (or via the Settings tab) before running CLI. The CLI reads it fresh on every launch.
+
+---
+
+### CLI in Relay Mode
+
+Set `"transport": "relay"` in `config.json` before launching CLI. The scanner step is optional (set `"preScanRelay": false` to skip it). The sender submits to the configured relay host; all Postfix queuing, retry, and bounce handling happens at the MTA level — no changes needed in the CLI workflow.
+
+---
+
+### CLI Without Any Prompts (non-interactive / scripted)
+
+The CLI is interactive by default. To run unattended (e.g. from a cron job or shell script), use the **web server** with the REST API instead:
+
+```bash
+# Start the server
+npm start &
+
+# Trigger a campaign via API
+curl -s -X POST http://localhost:3000/api/campaign/start \
+  -H "Content-Type: application/json" \
+  -H "X-API-Token: your-token" \
+  -d '{
+    "recipientsFile": "recipients.txt",
+    "smtpFile": "smtp.txt",
+    "subjectsFile": "subjects.txt",
+    "namesFile": "names.txt",
+    "htmlBodyFile": "body.html"
+  }'
+
+# Stream live progress
+curl -s http://localhost:3000/api/stream -H "X-API-Token: your-token"
+```
+
+---
+
+### Mode 5 — IP Scanner
+
+Tests a list of raw IPv4 addresses for outbound port 25, PTR record, SPF, and DMARC, then saves usable senders to `smtp.txt`. Identical to the web GUI IP Scanner tab.
+
+**Interactive (mode 5):**
+```
+Choose mode: 5
+Pick IP list file: ips.txt
+Include IPs without PTR record? (yes/no): no
+Save smtp config to: smtp.txt
+
+  ✓ 1.2.3.4          port25 open  mail.yourhost.com
+  ✗ 5.6.7.8          port25 closed  no PTR
+  ~ 9.10.11.12        port25 open  no PTR
+
+  ✓ 2 usable sender(s) saved to smtp.txt
+  Total scanned: 3  |  Usable: 2  |  Skipped: 1
+
+Send campaign now with these IPs? (yes/no): yes
+# → proceeds directly to the send wizard
+```
+
+**Non-interactive (flag):**
+
+```bash
+# With an IP list file
+node vps-sender.js --scan-ips ips.txt
+
+# Without a file — prompts for file picker interactively
+node vps-sender.js --scan-ips
+```
+
+`ips.txt` format — one IPv4 address per line (blank lines and whitespace ignored):
+```
+1.2.3.4
+5.6.7.8
+9.10.11.12
+```
+
+After the scan completes, `smtp.txt` is saved. You can then run:
+```bash
+npm run cli
+# → Choose mode 2 (Send only) → pick the generated smtp.txt
+```
+
+**What "usable" means:**
+- Port 25 is open on the IP
+- The IP has a PTR (reverse DNS) record
+
+Use "Include IPs without PTR?" if you want to include IPs that pass port 25 but have no rDNS (lower deliverability but more senders).
+
+---
+
+### DKIM in CLI Mode
+
+DKIM signing is automatic — no CLI-specific setup required. As long as `config.json` has the domain's entry and `dkim/<domain>.pem` exists on disk, every email sent via CLI will be DKIM-signed.
+
+To generate keys from the terminal:
+
+```bash
+npm run generate-dkim
+# Follow prompts — enter domain and selector
+# Key saved to dkim/<domain>.pem
+# Prints the DNS TXT record to publish
+```
+
+---
+
+### Results & Analytics
+
+| Feature | CLI | Web |
+|---------|-----|-----|
+| `results.csv` delivery log | ✓ | ✓ |
+| SQLite campaign history | — | ✓ |
+| Delivery Analytics page (App Sent, PF Delivered, PF Bounced) | — | ✓ |
+| Postfix Mail Queue monitor | — | ✓ |
+| Live SSE log stream | — | ✓ |
+
+CLI appends all delivery results to `results.csv`. To view full per-recipient Postfix analytics, run the web GUI (`mode 4` or `npm start`) and use the **Delivery Analytics** tab.
 
 ---
 
@@ -803,12 +1045,16 @@ Set it via:
 | `/api/export-csv` | GET | Download campaign results as CSV |
 | `/api/config` | GET / POST | Read or write configuration |
 | `/api/dkim/generate` | POST | Generate DKIM key pair and return DNS records |
-| `/api/scan` | POST | Start a domain scanner run |
+| `/api/scan` | POST | Start a domain scanner run (mxemails.txt → smtp.txt) |
+| `/api/scan/ips` | POST | Start an IP scanner run — body: `{ "ips": ["1.2.3.4", ...], "includeWeak": false, "outputFile": "smtp.txt" }` |
 | `/api/campaign/start` | POST | Start a campaign |
 | `/api/campaign/pause` | POST | Pause running campaign |
 | `/api/campaign/resume` | POST | Resume paused campaign |
 | `/api/campaign/stop` | POST | Cancel running campaign |
 | `/api/campaign/clear-history` | POST | Delete all send history (SQLite + CSV) — lets you resend to the same recipients |
+| `/api/analytics` | GET | Per-recipient delivery status combining SQLite results and Postfix log events. Query: `?campaignId=...&limit=500` |
+| `/api/analytics/campaigns` | GET | List all campaign IDs with stored results |
+| `/api/relay/health` | GET | Check connectivity to the configured relay host |
 | `/api/test-send` | POST | Send a single test email to verify delivery settings |
 | `/api/blacklist-check` | POST | Check sending IP against 8 DNSBL blocklists |
 

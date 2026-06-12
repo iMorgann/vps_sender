@@ -37,7 +37,8 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\" -Recurse -File)",
       "Bash(node --check lib/scanner/sender-health.js)",
       "Bash(echo \"exit:$?\")",
-      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\scanner\\\\ip-scanner.js\")"
+      "Bash(node --check \"c:\\\\Users\\\\iRoot\\\\Downloads\\\\Telegram Desktop\\\\vps-sender\\(3\\)\\\\lib\\\\scanner\\\\ip-scanner.js\")",
+      "Bash(node -e \"require\\('./vps-sender.js'\\)\")"
     ]
   }
 }
